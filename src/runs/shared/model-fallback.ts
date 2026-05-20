@@ -64,7 +64,12 @@ export function resolveModelCandidate(
 	preferredProvider?: string,
 ): string | undefined {
 	if (!model) return undefined;
-	const resolution = tryResolveModelCandidate(model, availableModels, availableModels, preferredProvider);
+	const resolution = tryResolveModelCandidate(
+		model,
+		availableModels,
+		availableModels,
+		preferredProvider,
+	);
 	return resolution.resolved ?? model;
 }
 
@@ -80,7 +85,12 @@ export function buildModelCandidates(
 	const errors: string[] = [];
 	for (const raw of [primaryModel, ...(fallbackModels ?? [])]) {
 		if (!raw) continue;
-		const resolution = tryResolveModelCandidate(raw.trim(), knownModels, availableModels, preferredProvider);
+		const resolution = tryResolveModelCandidate(
+			raw.trim(),
+			knownModels,
+			availableModels,
+			preferredProvider,
+		);
 		if (resolution.resolved) {
 			if (seen.has(resolution.resolved)) continue;
 			seen.add(resolution.resolved);
@@ -95,20 +105,38 @@ export function buildModelCandidates(
 	return candidates;
 }
 
-function findSuggestion(input: string, registry: AvailableModelInfo[]): string | undefined {
+function findSuggestion(
+	input: string,
+	registry: AvailableModelInfo[],
+): string | undefined {
 	const colonIdx = input.lastIndexOf(":");
 	if (colonIdx > 0) {
 		const suffixGuess = input.substring(colonIdx + 1);
 		const baseGuess = input.substring(0, colonIdx);
-		const isKnownLevel = (THINKING_LEVELS as readonly string[]).includes(suffixGuess);
+		const isKnownLevel = (THINKING_LEVELS as readonly string[]).includes(
+			suffixGuess,
+		);
 		if (!isKnownLevel) {
-			const baseEntry = registry.find((m) => m.id === baseGuess || m.fullId === baseGuess);
+			const baseEntry = registry.find(
+				(m) => m.id === baseGuess || m.fullId === baseGuess,
+			);
 			if (baseEntry) {
 				const ranked = (THINKING_LEVELS as readonly string[])
-					.map((level) => ({ level, distance: levenshtein(suffixGuess, level) }))
-					.filter((entry) => entry.distance > 0 && entry.distance <= 2 && entry.distance < suffixGuess.length)
+					.map((level) => ({
+						level,
+						distance: levenshtein(suffixGuess, level),
+					}))
+					.filter(
+						(entry) =>
+							entry.distance > 0 &&
+							entry.distance <= 2 &&
+							entry.distance < suffixGuess.length,
+					)
 					.sort((a, b) => a.distance - b.distance);
-				if (ranked[0] && (!ranked[1] || ranked[1].distance > ranked[0].distance)) {
+				if (
+					ranked[0] &&
+					(!ranked[1] || ranked[1].distance > ranked[0].distance)
+				) {
 					return `${baseEntry.fullId}:${ranked[0].level}`;
 				}
 			}
@@ -116,7 +144,9 @@ function findSuggestion(input: string, registry: AvailableModelInfo[]): string |
 	}
 
 	const { baseModel } = splitKnownThinkingSuffix(input);
-	const target = baseModel.includes("/") ? (baseModel.split("/").pop() ?? baseModel) : baseModel;
+	const target = baseModel.includes("/")
+		? (baseModel.split("/").pop() ?? baseModel)
+		: baseModel;
 	if (!target) return undefined;
 	const maxDist = Math.min(3, Math.floor(target.length / 3));
 	const ranked = registry
@@ -181,10 +211,15 @@ const RETRYABLE_MODEL_FAILURE_PATTERNS = [
 
 export function isRetryableModelFailure(error: string | undefined): boolean {
 	if (!error) return false;
-	return RETRYABLE_MODEL_FAILURE_PATTERNS.some((pattern) => pattern.test(error));
+	return RETRYABLE_MODEL_FAILURE_PATTERNS.some((pattern) =>
+		pattern.test(error),
+	);
 }
 
-export function formatModelAttemptNote(attempt: ModelAttemptSummary, nextModel?: string): string {
+export function formatModelAttemptNote(
+	attempt: ModelAttemptSummary,
+	nextModel?: string,
+): string {
 	const failure = attempt.error?.trim() || `exit ${attempt.exitCode ?? 1}`;
 	return nextModel
 		? `[fallback] ${attempt.model} failed: ${failure}. Retrying with ${nextModel}.`

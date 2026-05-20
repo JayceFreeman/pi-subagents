@@ -7,13 +7,23 @@
 
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { matchesKey, visibleWidth, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+	matchesKey,
+	visibleWidth,
+	truncateToWidth,
+} from "@earendil-works/pi-tui";
 import type { AgentConfig } from "../../agents/agents.ts";
 import type { ResolvedStepBehavior } from "../../shared/settings.ts";
 import { tryResolveModelCandidate } from "../shared/model-fallback.ts";
-import { findModelInfo, getSupportedThinkingLevels, splitKnownThinkingSuffix, type ModelInfo, type ThinkingLevel } from "../../shared/model-info.ts";
+import {
+	findModelInfo,
+	getSupportedThinkingLevels,
+	splitKnownThinkingSuffix,
+	type ModelInfo,
+	type ThinkingLevel,
+} from "../../shared/model-info.ts";
 
-type ClarifyMode = 'single' | 'parallel' | 'chain';
+type ClarifyMode = "single" | "parallel" | "chain";
 
 export interface BehaviorOverride {
 	output?: string | false;
@@ -30,8 +40,13 @@ export interface ChainClarifyResult {
 	runInBackground?: boolean;
 }
 
-type EditMode = "template" | "output" | "reads" | "model" | "thinking" | "skills";
-
+type EditMode =
+	| "template"
+	| "output"
+	| "reads"
+	| "model"
+	| "thinking"
+	| "skills";
 
 interface TextEditorState {
 	buffer: string;
@@ -43,7 +58,10 @@ function createEditorState(initial = ""): TextEditorState {
 	return { buffer: initial, cursor: 0, viewportOffset: 0 };
 }
 
-function wrapText(text: string, width: number): { lines: string[]; starts: number[] } {
+function wrapText(
+	text: string,
+	width: number,
+): { lines: string[]; starts: number[] } {
 	if (width <= 0) return { lines: [text], starts: [0] };
 	if (text.length === 0) return { lines: [""], starts: [0] };
 
@@ -77,29 +95,46 @@ function wrapText(text: string, width: number): { lines: string[]; starts: numbe
 		}
 		offset += segment.length + (index < segments.length - 1 ? 1 : 0);
 	}
-	if (!text.endsWith("\n") && text.length > 0 && visibleWidth(lines[lines.length - 1] ?? "") === width) {
+	if (
+		!text.endsWith("\n") &&
+		text.length > 0 &&
+		visibleWidth(lines[lines.length - 1] ?? "") === width
+	) {
 		starts.push(text.length);
 		lines.push("");
 	}
 	return { lines, starts };
 }
 
-function getCursorDisplayPos(cursor: number, starts: number[]): { line: number; col: number } {
+function getCursorDisplayPos(
+	cursor: number,
+	starts: number[],
+): { line: number; col: number } {
 	for (let i = starts.length - 1; i >= 0; i--) {
 		if (cursor >= starts[i]!) return { line: i, col: cursor - starts[i]! };
 	}
 	return { line: 0, col: 0 };
 }
 
-function ensureCursorVisible(cursorLine: number, viewportHeight: number, currentOffset: number): number {
+function ensureCursorVisible(
+	cursorLine: number,
+	viewportHeight: number,
+	currentOffset: number,
+): number {
 	if (cursorLine < currentOffset) return Math.max(0, cursorLine);
-	if (cursorLine >= currentOffset + viewportHeight) return Math.max(0, cursorLine - viewportHeight + 1);
+	if (cursorLine >= currentOffset + viewportHeight)
+		return Math.max(0, cursorLine - viewportHeight + 1);
 	return Math.max(0, currentOffset);
 }
 
 function isWordChar(ch: string): boolean {
 	const code = ch.charCodeAt(0);
-	return (code >= 48 && code <= 57) || (code >= 65 && code <= 90) || (code >= 97 && code <= 122) || code === 95;
+	return (
+		(code >= 48 && code <= 57) ||
+		(code >= 65 && code <= 90) ||
+		(code >= 97 && code <= 122) ||
+		code === 95
+	);
 }
 
 function wordBackward(buffer: string, cursor: number): number {
@@ -129,46 +164,102 @@ function normalizeInsertText(data: string): string | null {
 	return text;
 }
 
-function handleEditorInput(state: TextEditorState, data: string, textWidth: number): TextEditorState | null {
-	if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "return")) return null;
+function handleEditorInput(
+	state: TextEditorState,
+	data: string,
+	textWidth: number,
+): TextEditorState | null {
+	if (
+		matchesKey(data, "escape") ||
+		matchesKey(data, "ctrl+c") ||
+		matchesKey(data, "return")
+	)
+		return null;
 
 	const { lines: wrapped, starts } = wrapText(state.buffer, textWidth);
 	const cursorPos = getCursorDisplayPos(state.cursor, starts);
 
-	if (matchesKey(data, "alt+left") || matchesKey(data, "ctrl+left")) return { ...state, cursor: wordBackward(state.buffer, state.cursor) };
-	if (matchesKey(data, "alt+right") || matchesKey(data, "ctrl+right")) return { ...state, cursor: wordForward(state.buffer, state.cursor) };
-	if (matchesKey(data, "left")) return state.cursor > 0 ? { ...state, cursor: state.cursor - 1 } : state;
-	if (matchesKey(data, "right")) return state.cursor < state.buffer.length ? { ...state, cursor: state.cursor + 1 } : state;
+	if (matchesKey(data, "alt+left") || matchesKey(data, "ctrl+left"))
+		return { ...state, cursor: wordBackward(state.buffer, state.cursor) };
+	if (matchesKey(data, "alt+right") || matchesKey(data, "ctrl+right"))
+		return { ...state, cursor: wordForward(state.buffer, state.cursor) };
+	if (matchesKey(data, "left"))
+		return state.cursor > 0 ? { ...state, cursor: state.cursor - 1 } : state;
+	if (matchesKey(data, "right"))
+		return state.cursor < state.buffer.length
+			? { ...state, cursor: state.cursor + 1 }
+			: state;
 	if (matchesKey(data, "up") && cursorPos.line > 0) {
 		const targetLine = cursorPos.line - 1;
-		return { ...state, cursor: starts[targetLine]! + Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0) };
+		return {
+			...state,
+			cursor:
+				starts[targetLine]! +
+				Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0),
+		};
 	}
 	if (matchesKey(data, "down") && cursorPos.line < wrapped.length - 1) {
 		const targetLine = cursorPos.line + 1;
-		return { ...state, cursor: starts[targetLine]! + Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0) };
+		return {
+			...state,
+			cursor:
+				starts[targetLine]! +
+				Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0),
+		};
 	}
-	if (matchesKey(data, "home")) return { ...state, cursor: starts[cursorPos.line]! };
-	if (matchesKey(data, "end")) return { ...state, cursor: starts[cursorPos.line]! + (wrapped[cursorPos.line]?.length ?? 0) };
+	if (matchesKey(data, "home"))
+		return { ...state, cursor: starts[cursorPos.line]! };
+	if (matchesKey(data, "end"))
+		return {
+			...state,
+			cursor: starts[cursorPos.line]! + (wrapped[cursorPos.line]?.length ?? 0),
+		};
 	if (matchesKey(data, "ctrl+home")) return { ...state, cursor: 0 };
-	if (matchesKey(data, "ctrl+end")) return { ...state, cursor: state.buffer.length };
+	if (matchesKey(data, "ctrl+end"))
+		return { ...state, cursor: state.buffer.length };
 	if (matchesKey(data, "alt+backspace")) {
 		const target = wordBackward(state.buffer, state.cursor);
-		return target === state.cursor ? state : { ...state, buffer: state.buffer.slice(0, target) + state.buffer.slice(state.cursor), cursor: target };
+		return target === state.cursor
+			? state
+			: {
+					...state,
+					buffer:
+						state.buffer.slice(0, target) + state.buffer.slice(state.cursor),
+					cursor: target,
+				};
 	}
 	if (matchesKey(data, "backspace")) {
 		return state.cursor > 0
-			? { ...state, buffer: state.buffer.slice(0, state.cursor - 1) + state.buffer.slice(state.cursor), cursor: state.cursor - 1 }
+			? {
+					...state,
+					buffer:
+						state.buffer.slice(0, state.cursor - 1) +
+						state.buffer.slice(state.cursor),
+					cursor: state.cursor - 1,
+				}
 			: state;
 	}
 	if (matchesKey(data, "delete")) {
 		return state.cursor < state.buffer.length
-			? { ...state, buffer: state.buffer.slice(0, state.cursor) + state.buffer.slice(state.cursor + 1) }
+			? {
+					...state,
+					buffer:
+						state.buffer.slice(0, state.cursor) +
+						state.buffer.slice(state.cursor + 1),
+				}
 			: state;
 	}
 
 	const insert = normalizeInsertText(data);
 	return insert
-		? { ...state, buffer: state.buffer.slice(0, state.cursor) + insert + state.buffer.slice(state.cursor), cursor: state.cursor + insert.length }
+		? {
+				...state,
+				buffer:
+					state.buffer.slice(0, state.cursor) +
+					insert +
+					state.buffer.slice(state.cursor),
+				cursor: state.cursor + insert.length,
+			}
 		: null;
 }
 
@@ -179,14 +270,19 @@ function renderWithCursor(text: string, cursorPos: number): string {
 	return `${before}\x1b[7m${cursorChar}\x1b[27m${after}`;
 }
 
-function renderEditor(state: TextEditorState, width: number, viewportHeight: number): string[] {
+function renderEditor(
+	state: TextEditorState,
+	width: number,
+	viewportHeight: number,
+): string[] {
 	const { lines: wrapped, starts } = wrapText(state.buffer, width);
 	const cursorPos = getCursorDisplayPos(state.cursor, starts);
 	const lines: string[] = [];
 	for (let i = 0; i < viewportHeight; i++) {
 		const lineIdx = state.viewportOffset + i;
-		let content = lineIdx < wrapped.length ? wrapped[lineIdx] ?? "" : "";
-		if (lineIdx === cursorPos.line) content = renderWithCursor(content, cursorPos.col);
+		let content = lineIdx < wrapped.length ? (wrapped[lineIdx] ?? "") : "";
+		if (lineIdx === cursorPos.line)
+			content = renderWithCursor(content, cursorPos.col);
 		lines.push(content);
 	}
 	return lines;
@@ -214,7 +310,11 @@ export class ChainClarifyComponent implements Component {
 	private skillSearchQuery: string = "";
 	private skillSelectedNames: Set<string> = new Set();
 	private skillCursorIndex: number = 0;
-	private filteredSkills: Array<{ name: string; source: string; description?: string }> = [];
+	private filteredSkills: Array<{
+		name: string;
+		source: string;
+		description?: string;
+	}> = [];
 	private noticeMessage: { text: string; type: "info" | "error" } | null = null;
 	private noticeMessageTimer: ReturnType<typeof setTimeout> | null = null;
 	/** Run in background (async) mode */
@@ -229,7 +329,11 @@ export class ChainClarifyComponent implements Component {
 	private knownModels: ModelInfo[];
 	private availableModels: ModelInfo[];
 	private preferredProvider: string | undefined;
-	private availableSkills: Array<{ name: string; source: string; description?: string }>;
+	private availableSkills: Array<{
+		name: string;
+		source: string;
+		description?: string;
+	}>;
 	private done: (result: ChainClarifyResult) => void;
 	private mode: ClarifyMode;
 
@@ -244,9 +348,13 @@ export class ChainClarifyComponent implements Component {
 		knownModels: ModelInfo[],
 		availableModels: ModelInfo[],
 		preferredProvider: string | undefined,
-		availableSkills: Array<{ name: string; source: string; description?: string }>,
+		availableSkills: Array<{
+			name: string;
+			source: string;
+			description?: string;
+		}>,
 		done: (result: ChainClarifyResult) => void,
-		mode: ClarifyMode = 'chain',
+		mode: ClarifyMode = "chain",
 	) {
 		this.tui = tui;
 		this.theme = theme;
@@ -278,7 +386,11 @@ export class ChainClarifyComponent implements Component {
 	/** Create a row with border characters */
 	private row(content: string): string {
 		const innerW = this.width - 2;
-		return this.theme.fg("border", "│") + this.pad(content, innerW) + this.theme.fg("border", "│");
+		return (
+			this.theme.fg("border", "│") +
+			this.pad(content, innerW) +
+			this.theme.fg("border", "│")
+		);
 	}
 
 	/** Render centered header line with border */
@@ -324,7 +436,10 @@ export class ChainClarifyComponent implements Component {
 		const textWidth = innerW - 2; // 1 char padding on each side
 		const lines: string[] = [];
 
-		const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
+		const { lines: wrapped, starts } = wrapText(
+			this.editState.buffer,
+			textWidth,
+		);
 		const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
 		this.editState = {
 			...this.editState,
@@ -337,27 +452,37 @@ export class ChainClarifyComponent implements Component {
 
 		// Header (truncate agent name to prevent overflow)
 		const fieldName = this.editMode === "template" ? "task" : this.editMode;
-		const rawAgentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
+		const rawAgentName =
+			this.agentConfigs[this.editingStep!]?.name ?? "unknown";
 		const maxAgentLen = innerW - 30; // Reserve space for " Editing X (Step/Task N: ) "
-		const agentName = rawAgentName.length > maxAgentLen
-			? rawAgentName.slice(0, maxAgentLen - 1) + "…"
-			: rawAgentName;
+		const agentName =
+			rawAgentName.length > maxAgentLen
+				? rawAgentName.slice(0, maxAgentLen - 1) + "…"
+				: rawAgentName;
 		// Use mode-appropriate terminology
-		const stepLabel = this.mode === 'single' 
-			? agentName 
-			: this.mode === 'parallel' 
-				? `Task ${this.editingStep! + 1}: ${agentName}` 
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
+		const stepLabel =
+			this.mode === "single"
+				? agentName
+				: this.mode === "parallel"
+					? `Task ${this.editingStep! + 1}: ${agentName}`
+					: `Step ${this.editingStep! + 1}: ${agentName}`;
 		const headerText = ` Editing ${fieldName} (${stepLabel}) `;
 		lines.push(this.renderHeader(headerText));
 		lines.push(this.row(""));
 
-		const editorLines = renderEditor(this.editState, textWidth, this.EDIT_VIEWPORT_HEIGHT);
+		const editorLines = renderEditor(
+			this.editState,
+			textWidth,
+			this.EDIT_VIEWPORT_HEIGHT,
+		);
 		for (const line of editorLines) {
 			lines.push(this.row(` ${line}`));
 		}
 
-		const linesBelow = wrapped.length - this.editState.viewportOffset - this.EDIT_VIEWPORT_HEIGHT;
+		const linesBelow =
+			wrapped.length -
+			this.editState.viewportOffset -
+			this.EDIT_VIEWPORT_HEIGHT;
 		const hasMore = linesBelow > 0;
 		const hasLess = this.editState.viewportOffset > 0;
 		let scrollInfo = "";
@@ -388,7 +513,8 @@ export class ChainClarifyComponent implements Component {
 			output: override.output !== undefined ? override.output : base.output,
 			outputMode: base.outputMode,
 			reads: override.reads !== undefined ? override.reads : base.reads,
-			progress: override.progress !== undefined ? override.progress : base.progress,
+			progress:
+				override.progress !== undefined ? override.progress : base.progress,
 			skills: override.skills !== undefined ? override.skills : base.skills,
 			model: override.model !== undefined ? override.model : base.model,
 		};
@@ -406,13 +532,22 @@ export class ChainClarifyComponent implements Component {
 
 	/** Resolve a model name to its full provider/model format */
 	private resolveModelFullId(modelName: string): string {
-		const resolution = tryResolveModelCandidate(modelName, this.knownModels, this.availableModels, this.preferredProvider);
+		const resolution = tryResolveModelCandidate(
+			modelName,
+			this.knownModels,
+			this.availableModels,
+			this.preferredProvider,
+		);
 		if (resolution.error) this.showNotice(resolution.error, "error");
 		return resolution.resolved ?? modelName;
 	}
 
 	/** Update a behavior override for a step */
-	private updateBehavior(stepIndex: number, field: keyof BehaviorOverride, value: string | boolean | string[] | false): void {
+	private updateBehavior(
+		stepIndex: number,
+		field: keyof BehaviorOverride,
+		value: string | boolean | string[] | false,
+	): void {
 		const existing = this.behaviorOverrides.get(stepIndex) ?? {};
 		this.behaviorOverrides.set(stepIndex, { ...existing, [field]: value });
 	}
@@ -452,7 +587,12 @@ export class ChainClarifyComponent implements Component {
 			for (let i = 0; i < this.agentConfigs.length; i++) {
 				overrides.push(this.behaviorOverrides.get(i));
 			}
-			this.done({ confirmed: true, templates: this.templates, behaviorOverrides: overrides, runInBackground: this.runInBackground });
+			this.done({
+				confirmed: true,
+				templates: this.templates,
+				behaviorOverrides: overrides,
+				runInBackground: this.runInBackground,
+			});
 			return;
 		}
 
@@ -499,18 +639,20 @@ export class ChainClarifyComponent implements Component {
 			return;
 		}
 
-		if (data === "w" && this.mode !== 'parallel') {
+		if (data === "w" && this.mode !== "parallel") {
 			this.enterEditMode("output");
 			return;
 		}
 
-		if (data === "r" && this.mode === 'chain') {
+		if (data === "r" && this.mode === "chain") {
 			this.enterEditMode("reads");
 			return;
 		}
 
-		if (data === "p" && this.mode === 'chain') {
-			const anyEnabled = this.agentConfigs.some((_, i) => this.getEffectiveBehavior(i).progress);
+		if (data === "p" && this.mode === "chain") {
+			const anyEnabled = this.agentConfigs.some(
+				(_, i) => this.getEffectiveBehavior(i).progress,
+			);
 			const newState = !anyEnabled;
 			for (let i = 0; i < this.agentConfigs.length; i++) {
 				this.updateBehavior(i, "progress", newState);
@@ -524,7 +666,6 @@ export class ChainClarifyComponent implements Component {
 			this.tui.requestRender();
 			return;
 		}
-
 	}
 
 	private enterEditMode(mode: EditMode): void {
@@ -537,10 +678,10 @@ export class ChainClarifyComponent implements Component {
 			buffer = template.split("\n")[0] ?? "";
 		} else if (mode === "output") {
 			const behavior = this.getEffectiveBehavior(this.selectedStep);
-			buffer = behavior.output === false ? "" : (behavior.output || "");
+			buffer = behavior.output === false ? "" : behavior.output || "";
 		} else if (mode === "reads") {
 			const behavior = this.getEffectiveBehavior(this.selectedStep);
-			buffer = behavior.reads === false ? "" : (behavior.reads?.join(", ") || "");
+			buffer = behavior.reads === false ? "" : behavior.reads?.join(", ") || "";
 		}
 
 		this.editState = createEditorState(buffer);
@@ -554,8 +695,12 @@ export class ChainClarifyComponent implements Component {
 		this.modelSearchQuery = "";
 		this.modelSelectedIndex = 0;
 		this.filteredModels = [...this.availableModels];
-		const currentModel = splitKnownThinkingSuffix(this.getEffectiveModel(this.selectedStep)).baseModel;
-		const currentIndex = this.filteredModels.findIndex((m) => m.fullId === currentModel || m.id === currentModel);
+		const currentModel = splitKnownThinkingSuffix(
+			this.getEffectiveModel(this.selectedStep),
+		).baseModel;
+		const currentIndex = this.filteredModels.findIndex(
+			(m) => m.fullId === currentModel || m.id === currentModel,
+		);
 		if (currentIndex >= 0) {
 			this.modelSelectedIndex = currentIndex;
 		}
@@ -569,13 +714,17 @@ export class ChainClarifyComponent implements Component {
 		if (!query) {
 			this.filteredModels = [...this.availableModels];
 		} else {
-			this.filteredModels = this.availableModels.filter((m) =>
-				m.fullId.toLowerCase().includes(query) ||
-				m.id.toLowerCase().includes(query) ||
-				m.provider.toLowerCase().includes(query)
+			this.filteredModels = this.availableModels.filter(
+				(m) =>
+					m.fullId.toLowerCase().includes(query) ||
+					m.id.toLowerCase().includes(query) ||
+					m.provider.toLowerCase().includes(query),
 			);
 		}
-		this.modelSelectedIndex = Math.min(this.modelSelectedIndex, Math.max(0, this.filteredModels.length - 1));
+		this.modelSelectedIndex = Math.min(
+			this.modelSelectedIndex,
+			Math.max(0, this.filteredModels.length - 1),
+		);
 	}
 
 	private handleModelSelectorInput(data: string): void {
@@ -587,11 +736,25 @@ export class ChainClarifyComponent implements Component {
 		if (matchesKey(data, "return")) {
 			const selected = this.filteredModels[this.modelSelectedIndex];
 			if (selected) {
-				const { thinkingSuffix } = splitKnownThinkingSuffix(this.getEffectiveModel(this.editingStep!));
+				const { thinkingSuffix } = splitKnownThinkingSuffix(
+					this.getEffectiveModel(this.editingStep!),
+				);
 				const requestedLevel = thinkingSuffix.slice(1);
-				const selectedModel = findModelInfo(selected.fullId, this.availableModels, this.preferredProvider);
-				const suffix = getSupportedThinkingLevels(selectedModel).some((level) => level === requestedLevel) ? thinkingSuffix : "";
-				this.updateBehavior(this.editingStep!, "model", `${selected.fullId}${suffix}`);
+				const selectedModel = findModelInfo(
+					selected.fullId,
+					this.availableModels,
+					this.preferredProvider,
+				);
+				const suffix = getSupportedThinkingLevels(selectedModel).some(
+					(level) => level === requestedLevel,
+				)
+					? thinkingSuffix
+					: "";
+				this.updateBehavior(
+					this.editingStep!,
+					"model",
+					`${selected.fullId}${suffix}`,
+				);
 			}
 			this.exitEditMode();
 			return;
@@ -599,9 +762,10 @@ export class ChainClarifyComponent implements Component {
 
 		if (matchesKey(data, "up")) {
 			if (this.filteredModels.length > 0) {
-				this.modelSelectedIndex = this.modelSelectedIndex === 0
-					? this.filteredModels.length - 1
-					: this.modelSelectedIndex - 1;
+				this.modelSelectedIndex =
+					this.modelSelectedIndex === 0
+						? this.filteredModels.length - 1
+						: this.modelSelectedIndex - 1;
 			}
 			this.tui.requestRender();
 			return;
@@ -609,9 +773,10 @@ export class ChainClarifyComponent implements Component {
 
 		if (matchesKey(data, "down")) {
 			if (this.filteredModels.length > 0) {
-				this.modelSelectedIndex = this.modelSelectedIndex === this.filteredModels.length - 1
-					? 0
-					: this.modelSelectedIndex + 1;
+				this.modelSelectedIndex =
+					this.modelSelectedIndex === this.filteredModels.length - 1
+						? 0
+						: this.modelSelectedIndex + 1;
 			}
 			this.tui.requestRender();
 			return;
@@ -635,7 +800,13 @@ export class ChainClarifyComponent implements Component {
 	}
 
 	private getAvailableThinkingLevels(stepIndex: number): ThinkingLevel[] {
-		return getSupportedThinkingLevels(findModelInfo(this.getEffectiveModel(stepIndex), this.availableModels, this.preferredProvider));
+		return getSupportedThinkingLevels(
+			findModelInfo(
+				this.getEffectiveModel(stepIndex),
+				this.availableModels,
+				this.preferredProvider,
+			),
+		);
 	}
 
 	/** Enter thinking level selector mode */
@@ -648,10 +819,13 @@ export class ChainClarifyComponent implements Component {
 		this.editMode = "thinking";
 
 		const levels = this.getAvailableThinkingLevels(this.selectedStep);
-		const { thinkingSuffix } = splitKnownThinkingSuffix(this.getEffectiveModel(this.selectedStep));
+		const { thinkingSuffix } = splitKnownThinkingSuffix(
+			this.getEffectiveModel(this.selectedStep),
+		);
 		const suffix = thinkingSuffix.slice(1);
 		const levelIdx = levels.findIndex((level) => level === suffix);
-		this.thinkingSelectedIndex = levelIdx >= 0 ? levelIdx : Math.max(0, levels.indexOf("off"));
+		this.thinkingSelectedIndex =
+			levelIdx >= 0 ? levelIdx : Math.max(0, levels.indexOf("off"));
 
 		this.tui.requestRender();
 	}
@@ -673,17 +847,19 @@ export class ChainClarifyComponent implements Component {
 		}
 
 		if (matchesKey(data, "up")) {
-			this.thinkingSelectedIndex = this.thinkingSelectedIndex === 0
-				? levels.length - 1
-				: this.thinkingSelectedIndex - 1;
+			this.thinkingSelectedIndex =
+				this.thinkingSelectedIndex === 0
+					? levels.length - 1
+					: this.thinkingSelectedIndex - 1;
 			this.tui.requestRender();
 			return;
 		}
 
 		if (matchesKey(data, "down")) {
-			this.thinkingSelectedIndex = this.thinkingSelectedIndex === levels.length - 1
-				? 0
-				: this.thinkingSelectedIndex + 1;
+			this.thinkingSelectedIndex =
+				this.thinkingSelectedIndex === levels.length - 1
+					? 0
+					: this.thinkingSelectedIndex + 1;
 			this.tui.requestRender();
 			return;
 		}
@@ -705,12 +881,16 @@ export class ChainClarifyComponent implements Component {
 		if (!query) {
 			this.filteredSkills = [...this.availableSkills];
 		} else {
-			this.filteredSkills = this.availableSkills.filter((s) =>
-				s.name.toLowerCase().includes(query) ||
-				(s.description?.toLowerCase().includes(query) ?? false),
+			this.filteredSkills = this.availableSkills.filter(
+				(s) =>
+					s.name.toLowerCase().includes(query) ||
+					(s.description?.toLowerCase().includes(query) ?? false),
 			);
 		}
-		this.skillCursorIndex = Math.min(this.skillCursorIndex, Math.max(0, this.filteredSkills.length - 1));
+		this.skillCursorIndex = Math.min(
+			this.skillCursorIndex,
+			Math.max(0, this.filteredSkills.length - 1),
+		);
 	}
 
 	private handleSkillSelectorInput(data: string): void {
@@ -743,9 +923,10 @@ export class ChainClarifyComponent implements Component {
 
 		if (matchesKey(data, "up")) {
 			if (this.filteredSkills.length > 0) {
-				this.skillCursorIndex = this.skillCursorIndex === 0
-					? this.filteredSkills.length - 1
-					: this.skillCursorIndex - 1;
+				this.skillCursorIndex =
+					this.skillCursorIndex === 0
+						? this.filteredSkills.length - 1
+						: this.skillCursorIndex - 1;
 			}
 			this.tui.requestRender();
 			return;
@@ -753,9 +934,10 @@ export class ChainClarifyComponent implements Component {
 
 		if (matchesKey(data, "down")) {
 			if (this.filteredSkills.length > 0) {
-				this.skillCursorIndex = this.skillCursorIndex === this.filteredSkills.length - 1
-					? 0
-					: this.skillCursorIndex + 1;
+				this.skillCursorIndex =
+					this.skillCursorIndex === this.filteredSkills.length - 1
+						? 0
+						: this.skillCursorIndex + 1;
 			}
 			this.tui.requestRender();
 			return;
@@ -781,21 +963,45 @@ export class ChainClarifyComponent implements Component {
 	private handleEditInput(data: string): void {
 		const textWidth = this.width - 4; // Must match render: innerW - 2 = (width - 2) - 2
 		if (matchesKey(data, "shift+up") || matchesKey(data, "pageup")) {
-			const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
+			const { lines: wrapped, starts } = wrapText(
+				this.editState.buffer,
+				textWidth,
+			);
 			const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
-			const targetLine = Math.max(0, cursorPos.line - this.EDIT_VIEWPORT_HEIGHT);
-			const targetCol = Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0);
-			this.editState = { ...this.editState, cursor: starts[targetLine] + targetCol };
+			const targetLine = Math.max(
+				0,
+				cursorPos.line - this.EDIT_VIEWPORT_HEIGHT,
+			);
+			const targetCol = Math.min(
+				cursorPos.col,
+				wrapped[targetLine]?.length ?? 0,
+			);
+			this.editState = {
+				...this.editState,
+				cursor: starts[targetLine] + targetCol,
+			};
 			this.tui.requestRender();
 			return;
 		}
 
 		if (matchesKey(data, "shift+down") || matchesKey(data, "pagedown")) {
-			const { lines: wrapped, starts } = wrapText(this.editState.buffer, textWidth);
+			const { lines: wrapped, starts } = wrapText(
+				this.editState.buffer,
+				textWidth,
+			);
 			const cursorPos = getCursorDisplayPos(this.editState.cursor, starts);
-			const targetLine = Math.min(wrapped.length - 1, cursorPos.line + this.EDIT_VIEWPORT_HEIGHT);
-			const targetCol = Math.min(cursorPos.col, wrapped[targetLine]?.length ?? 0);
-			this.editState = { ...this.editState, cursor: starts[targetLine] + targetCol };
+			const targetLine = Math.min(
+				wrapped.length - 1,
+				cursorPos.line + this.EDIT_VIEWPORT_HEIGHT,
+			);
+			const targetCol = Math.min(
+				cursorPos.col,
+				wrapped[targetLine]?.length ?? 0,
+			);
+			this.editState = {
+				...this.editState,
+				cursor: starts[targetLine] + targetCol,
+			};
 			this.tui.requestRender();
 			return;
 		}
@@ -833,7 +1039,8 @@ export class ChainClarifyComponent implements Component {
 		} else if (this.editMode === "output") {
 			// Capture OLD output before updating (for downstream propagation)
 			const oldBehavior = this.getEffectiveBehavior(stepIndex);
-			const oldOutput = typeof oldBehavior.output === "string" ? oldBehavior.output : null;
+			const oldOutput =
+				typeof oldBehavior.output === "string" ? oldBehavior.output : null;
 
 			// Empty string or whitespace means disable output
 			const trimmed = this.editState.buffer.trim();
@@ -841,7 +1048,11 @@ export class ChainClarifyComponent implements Component {
 			this.updateBehavior(stepIndex, "output", newOutput);
 
 			// Propagate output filename change to downstream steps' reads
-			if (oldOutput && typeof newOutput === "string" && oldOutput !== newOutput) {
+			if (
+				oldOutput &&
+				typeof newOutput === "string" &&
+				oldOutput !== newOutput
+			) {
 				this.propagateOutputChange(stepIndex, oldOutput, newOutput);
 			}
 		} else if (this.editMode === "reads") {
@@ -850,8 +1061,15 @@ export class ChainClarifyComponent implements Component {
 			if (trimmed === "") {
 				this.updateBehavior(stepIndex, "reads", false);
 			} else {
-				const files = trimmed.split(",").map(f => f.trim()).filter(f => f !== "");
-				this.updateBehavior(stepIndex, "reads", files.length > 0 ? files : false);
+				const files = trimmed
+					.split(",")
+					.map((f) => f.trim())
+					.filter((f) => f !== "");
+				this.updateBehavior(
+					stepIndex,
+					"reads",
+					files.length > 0 ? files : false,
+				);
 			}
 		}
 	}
@@ -860,20 +1078,28 @@ export class ChainClarifyComponent implements Component {
 	 * When a step's output filename changes, update downstream steps that read from it.
 	 * This maintains the chain dependency automatically.
 	 */
-	private propagateOutputChange(changedStepIndex: number, oldOutput: string, newOutput: string): void {
+	private propagateOutputChange(
+		changedStepIndex: number,
+		oldOutput: string,
+		newOutput: string,
+	): void {
 		// Check all downstream steps (steps that come after the changed step)
 		for (let i = changedStepIndex + 1; i < this.agentConfigs.length; i++) {
 			const behavior = this.getEffectiveBehavior(i);
-			
+
 			// Skip if reads is disabled or empty
-			if (behavior.reads === false || !behavior.reads || behavior.reads.length === 0) {
+			if (
+				behavior.reads === false ||
+				!behavior.reads ||
+				behavior.reads.length === 0
+			) {
 				continue;
 			}
 
 			// Check if this step reads the old output file
 			const readsArray = behavior.reads;
 			const oldIndex = readsArray.indexOf(oldOutput);
-			
+
 			if (oldIndex !== -1) {
 				// Replace old filename with new filename in reads
 				const newReads = [...readsArray];
@@ -898,9 +1124,12 @@ export class ChainClarifyComponent implements Component {
 		}
 		// Mode-based navigation rendering
 		switch (this.mode) {
-			case 'single': return this.renderSingleMode();
-			case 'parallel': return this.renderParallelMode();
-			case 'chain': return this.renderChainMode();
+			case "single":
+				return this.renderSingleMode();
+			case "parallel":
+				return this.renderParallelMode();
+			case "chain":
+				return this.renderChainMode();
 		}
 	}
 
@@ -911,11 +1140,12 @@ export class ChainClarifyComponent implements Component {
 
 		// Header (mode-aware terminology)
 		const agentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
-		const stepLabel = this.mode === 'single' 
-			? agentName 
-			: this.mode === 'parallel' 
-				? `Task ${this.editingStep! + 1}: ${agentName}` 
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
+		const stepLabel =
+			this.mode === "single"
+				? agentName
+				: this.mode === "parallel"
+					? `Task ${this.editingStep! + 1}: ${agentName}`
+					: `Step ${this.editingStep! + 1}: ${agentName}`;
 		const headerText = ` Select Model (${stepLabel}) `;
 		lines.push(this.renderHeader(headerText));
 		lines.push(this.row(""));
@@ -939,11 +1169,17 @@ export class ChainClarifyComponent implements Component {
 			let startIdx = 0;
 
 			if (this.filteredModels.length > maxVisible) {
-				startIdx = Math.max(0, this.modelSelectedIndex - Math.floor(maxVisible / 2));
+				startIdx = Math.max(
+					0,
+					this.modelSelectedIndex - Math.floor(maxVisible / 2),
+				);
 				startIdx = Math.min(startIdx, this.filteredModels.length - maxVisible);
 			}
 
-			const endIdx = Math.min(startIdx + maxVisible, this.filteredModels.length);
+			const endIdx = Math.min(
+				startIdx + maxVisible,
+				this.filteredModels.length,
+			);
 
 			if (startIdx > 0) {
 				lines.push(this.row(` ${th.fg("dim", `  ↑ ${startIdx} more`)}`));
@@ -952,13 +1188,16 @@ export class ChainClarifyComponent implements Component {
 			for (let i = startIdx; i < endIdx; i++) {
 				const model = this.filteredModels[i]!;
 				const isSelected = i === this.modelSelectedIndex;
-				const isCurrent = model.fullId === currentModelBase || model.id === currentModelBase;
+				const isCurrent =
+					model.fullId === currentModelBase || model.id === currentModelBase;
 				const prefix = isSelected ? th.fg("accent", "→ ") : "  ";
 				const modelText = isSelected ? th.fg("accent", model.id) : model.id;
 				const providerBadge = th.fg("dim", ` [${model.provider}]`);
 				const currentBadge = isCurrent ? th.fg("success", " current") : "";
 
-				lines.push(this.row(` ${prefix}${modelText}${providerBadge}${currentBadge}`));
+				lines.push(
+					this.row(` ${prefix}${modelText}${providerBadge}${currentBadge}`),
+				);
 			}
 
 			const remaining = this.filteredModels.length - endIdx;
@@ -985,11 +1224,12 @@ export class ChainClarifyComponent implements Component {
 		const lines: string[] = [];
 
 		const agentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
-		const stepLabel = this.mode === 'single' 
-			? agentName 
-			: this.mode === 'parallel' 
-				? `Task ${this.editingStep! + 1}: ${agentName}` 
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
+		const stepLabel =
+			this.mode === "single"
+				? agentName
+				: this.mode === "parallel"
+					? `Task ${this.editingStep! + 1}: ${agentName}`
+					: `Step ${this.editingStep! + 1}: ${agentName}`;
 		const headerText = ` Thinking Level (${stepLabel}) `;
 		lines.push(this.renderHeader(headerText));
 		lines.push(this.row(""));
@@ -999,16 +1239,20 @@ export class ChainClarifyComponent implements Component {
 		lines.push(this.row(` ${currentLabel}${th.fg("accent", currentModel)}`));
 		lines.push(this.row(""));
 
-		lines.push(this.row(` ${th.fg("dim", "Select thinking level (extended thinking budget):")}`));
+		lines.push(
+			this.row(
+				` ${th.fg("dim", "Select thinking level (extended thinking budget):")}`,
+			),
+		);
 		lines.push(this.row(""));
 
 		const levelDescriptions: Record<ThinkingLevel, string> = {
-			"off": "No extended thinking",
-			"minimal": "Brief reasoning",
-			"low": "Light reasoning",
-			"medium": "Moderate reasoning",
-			"high": "Deep reasoning",
-			"xhigh": "Maximum reasoning (ultrathink)",
+			off: "No extended thinking",
+			minimal: "Brief reasoning",
+			low: "Light reasoning",
+			medium: "Moderate reasoning",
+			high: "Deep reasoning",
+			xhigh: "Maximum reasoning (ultrathink)",
 		};
 
 		const levels = this.getAvailableThinkingLevels(this.editingStep!);
@@ -1031,9 +1275,10 @@ export class ChainClarifyComponent implements Component {
 			lines.push(this.row(""));
 		}
 
-		const footerText = levels.length === 0
-			? " [Esc] Cancel "
-			: " [Enter] Select • [Esc] Cancel • ↑↓ Navigate ";
+		const footerText =
+			levels.length === 0
+				? " [Esc] Cancel "
+				: " [Enter] Select • [Esc] Cancel • ↑↓ Navigate ";
 		lines.push(this.renderFooter(footerText));
 
 		return lines;
@@ -1045,20 +1290,28 @@ export class ChainClarifyComponent implements Component {
 		const lines: string[] = [];
 
 		const agentName = this.agentConfigs[this.editingStep!]?.name ?? "unknown";
-		const stepLabel = this.mode === 'single'
-			? agentName
-			: this.mode === 'parallel'
-				? `Task ${this.editingStep! + 1}: ${agentName}`
-				: `Step ${this.editingStep! + 1}: ${agentName}`;
+		const stepLabel =
+			this.mode === "single"
+				? agentName
+				: this.mode === "parallel"
+					? `Task ${this.editingStep! + 1}: ${agentName}`
+					: `Step ${this.editingStep! + 1}: ${agentName}`;
 		lines.push(this.renderHeader(` Select Skills (${stepLabel}) `));
 		lines.push(this.row(""));
 
 		const cursor = "\x1b[7m \x1b[27m";
-		lines.push(this.row(` ${th.fg("dim", "Search: ")}${this.skillSearchQuery}${cursor}`));
+		lines.push(
+			this.row(` ${th.fg("dim", "Search: ")}${this.skillSearchQuery}${cursor}`),
+		);
 		lines.push(this.row(""));
 
-		const selected = [...this.skillSelectedNames].join(", ") || th.fg("dim", "(none)");
-		lines.push(this.row(` ${th.fg("dim", "Selected: ")}${truncateToWidth(selected, innerW - 12)}`));
+		const selected =
+			[...this.skillSelectedNames].join(", ") || th.fg("dim", "(none)");
+		lines.push(
+			this.row(
+				` ${th.fg("dim", "Selected: ")}${truncateToWidth(selected, innerW - 12)}`,
+			),
+		);
 		lines.push(this.row(""));
 
 		const selectorHeight = 10;
@@ -1067,10 +1320,19 @@ export class ChainClarifyComponent implements Component {
 		} else {
 			let startIdx = 0;
 			if (this.filteredSkills.length > selectorHeight) {
-				startIdx = Math.max(0, this.skillCursorIndex - Math.floor(selectorHeight / 2));
-				startIdx = Math.min(startIdx, this.filteredSkills.length - selectorHeight);
+				startIdx = Math.max(
+					0,
+					this.skillCursorIndex - Math.floor(selectorHeight / 2),
+				);
+				startIdx = Math.min(
+					startIdx,
+					this.filteredSkills.length - selectorHeight,
+				);
 			}
-			const endIdx = Math.min(startIdx + selectorHeight, this.filteredSkills.length);
+			const endIdx = Math.min(
+				startIdx + selectorHeight,
+				this.filteredSkills.length,
+			);
 
 			if (startIdx > 0) {
 				lines.push(this.row(` ${th.fg("dim", `  ↑ ${startIdx} more`)}`));
@@ -1089,7 +1351,9 @@ export class ChainClarifyComponent implements Component {
 					? th.fg("dim", ` - ${truncateToWidth(skill.description, 25)}`)
 					: "";
 
-				lines.push(this.row(` ${prefix}${checkbox} ${nameText}${sourceBadge}${desc}`));
+				lines.push(
+					this.row(` ${prefix}${checkbox} ${nameText}${sourceBadge}${desc}`),
+				);
 			}
 
 			const remaining = this.filteredSkills.length - endIdx;
@@ -1103,18 +1367,20 @@ export class ChainClarifyComponent implements Component {
 			lines.push(this.row(""));
 		}
 
-		lines.push(this.renderFooter(" [Enter] Confirm • [Space] Toggle • [Esc] Cancel "));
+		lines.push(
+			this.renderFooter(" [Enter] Confirm • [Space] Toggle • [Esc] Cancel "),
+		);
 		return lines;
 	}
 
 	private getFooterText(): string {
-		const bgLabel = this.runInBackground ? '[b]g:ON' : '[b]g';
+		const bgLabel = this.runInBackground ? "[b]g:ON" : "[b]g";
 		switch (this.mode) {
-			case 'single':
+			case "single":
 				return ` [Enter] Run • [Esc] Cancel • e m t w s ${bgLabel} `;
-			case 'parallel':
+			case "parallel":
 				return ` [Enter] Run • [Esc] Cancel • e m t s ${bgLabel} • ↑↓ Nav `;
-			case 'chain':
+			case "chain":
 				return ` [Enter] Run • [Esc] Cancel • e m t w r p s ${bgLabel} • ↑↓ Nav `;
 		}
 	}
@@ -1144,7 +1410,9 @@ export class ChainClarifyComponent implements Component {
 
 		const template = (this.templates[0] ?? "").split("\n")[0] ?? "";
 		const taskLabel = th.fg("dim", "task: ");
-		lines.push(this.row(`     ${taskLabel}${truncateToWidth(template, innerW - 12)}`));
+		lines.push(
+			this.row(`     ${taskLabel}${truncateToWidth(template, innerW - 12)}`),
+		);
 
 		const effectiveModel = this.getEffectiveModel(0);
 		const override = this.behaviorOverrides.get(0);
@@ -1153,19 +1421,33 @@ export class ChainClarifyComponent implements Component {
 			? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
 			: effectiveModel;
 		const modelLabel = th.fg("dim", "model: ");
-		lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
+		lines.push(
+			this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`),
+		);
 
-		const writesValue = behavior.output === false
-			? th.fg("dim", "(disabled)")
-			: (behavior.output || th.fg("dim", "(none)"));
+		const writesValue =
+			behavior.output === false
+				? th.fg("dim", "(disabled)")
+				: behavior.output || th.fg("dim", "(none)");
 		const writesLabel = th.fg("dim", "writes: ");
-		lines.push(this.row(`     ${writesLabel}${truncateToWidth(writesValue, innerW - 14)}`));
+		lines.push(
+			this.row(
+				`     ${writesLabel}${truncateToWidth(writesValue, innerW - 14)}`,
+			),
+		);
 
-		const skillsValue = behavior.skills === false
-			? th.fg("dim", "(disabled)")
-			: (behavior.skills?.length ? behavior.skills.join(", ") : th.fg("dim", "(none)"));
+		const skillsValue =
+			behavior.skills === false
+				? th.fg("dim", "(disabled)")
+				: behavior.skills?.length
+					? behavior.skills.join(", ")
+					: th.fg("dim", "(none)");
 		const skillsLabel = th.fg("dim", "skills: ");
-		lines.push(this.row(`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`));
+		lines.push(
+			this.row(
+				`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`,
+			),
+		);
 
 		lines.push(this.row(""));
 
@@ -1192,15 +1474,20 @@ export class ChainClarifyComponent implements Component {
 			const prefix = isSelected ? "▶ " : "  ";
 			const taskPrefix = `Task ${i + 1}: `;
 			const maxNameLen = innerW - 4 - prefix.length - taskPrefix.length;
-			const agentName = config.name.length > maxNameLen
-				? config.name.slice(0, maxNameLen - 1) + "…"
-				: config.name;
+			const agentName =
+				config.name.length > maxNameLen
+					? config.name.slice(0, maxNameLen - 1) + "…"
+					: config.name;
 			const taskLabel = `${taskPrefix}${agentName}`;
 			lines.push(this.row(` ${th.fg(color, prefix + taskLabel)}`));
 
 			const template = (this.templates[i] ?? "").split("\n")[0] ?? "";
 			const taskTextLabel = th.fg("dim", "task: ");
-			lines.push(this.row(`     ${taskTextLabel}${truncateToWidth(template, innerW - 12)}`));
+			lines.push(
+				this.row(
+					`     ${taskTextLabel}${truncateToWidth(template, innerW - 12)}`,
+				),
+			);
 
 			const effectiveModel = this.getEffectiveModel(i);
 			const override = this.behaviorOverrides.get(i);
@@ -1209,14 +1496,25 @@ export class ChainClarifyComponent implements Component {
 				? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
 				: effectiveModel;
 			const modelLabel = th.fg("dim", "model: ");
-			lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
+			lines.push(
+				this.row(
+					`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`,
+				),
+			);
 
 			const behavior = this.getEffectiveBehavior(i);
-			const skillsValue = behavior.skills === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.skills?.length ? behavior.skills.join(", ") : th.fg("dim", "(none)"));
+			const skillsValue =
+				behavior.skills === false
+					? th.fg("dim", "(disabled)")
+					: behavior.skills?.length
+						? behavior.skills.join(", ")
+						: th.fg("dim", "(none)");
 			const skillsLabel = th.fg("dim", "skills: ");
-			lines.push(this.row(`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`));
+			lines.push(
+				this.row(
+					`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`,
+				),
+			);
 
 			lines.push(this.row(""));
 		}
@@ -1244,9 +1542,17 @@ export class ChainClarifyComponent implements Component {
 		const chainDirPreview = truncateToWidth(this.chainDir ?? "", innerW - 12);
 		lines.push(this.row(` Chain Dir: ${th.fg("dim", chainDirPreview)}`));
 
-		const progressEnabled = this.agentConfigs.some((_, i) => this.getEffectiveBehavior(i).progress);
-		const progressValue = progressEnabled ? th.fg("success", "enabled") : th.fg("dim", "disabled");
-		lines.push(this.row(` Progress: ${progressValue} ${th.fg("dim", "(press [p] to toggle)")}`));
+		const progressEnabled = this.agentConfigs.some(
+			(_, i) => this.getEffectiveBehavior(i).progress,
+		);
+		const progressValue = progressEnabled
+			? th.fg("success", "enabled")
+			: th.fg("dim", "disabled");
+		lines.push(
+			this.row(
+				` Progress: ${progressValue} ${th.fg("dim", "(press [p] to toggle)")}`,
+			),
+		);
 		lines.push(this.row(""));
 
 		for (let i = 0; i < this.agentConfigs.length; i++) {
@@ -1258,13 +1564,12 @@ export class ChainClarifyComponent implements Component {
 			const prefix = isSelected ? "▶ " : "  ";
 			const stepPrefix = `Step ${i + 1}: `;
 			const maxNameLen = innerW - 4 - prefix.length - stepPrefix.length;
-			const agentName = config.name.length > maxNameLen
-				? config.name.slice(0, maxNameLen - 1) + "…"
-				: config.name;
+			const agentName =
+				config.name.length > maxNameLen
+					? config.name.slice(0, maxNameLen - 1) + "…"
+					: config.name;
 			const stepLabel = `${stepPrefix}${agentName}`;
-			lines.push(
-				this.row(` ${th.fg(color, prefix + stepLabel)}`),
-			);
+			lines.push(this.row(` ${th.fg(color, prefix + stepLabel)}`));
 
 			const template = (this.templates[i] ?? "").split("\n")[0] ?? "";
 			const highlighted = template
@@ -1273,7 +1578,11 @@ export class ChainClarifyComponent implements Component {
 				.replace(/\{chain_dir\}/g, th.fg("accent", "{chain_dir}"));
 
 			const templateLabel = th.fg("dim", "task: ");
-			lines.push(this.row(`     ${templateLabel}${truncateToWidth(highlighted, innerW - 12)}`));
+			lines.push(
+				this.row(
+					`     ${templateLabel}${truncateToWidth(highlighted, innerW - 12)}`,
+				),
+			);
 
 			const effectiveModel = this.getEffectiveModel(i);
 			const override = this.behaviorOverrides.get(i);
@@ -1282,31 +1591,52 @@ export class ChainClarifyComponent implements Component {
 				? th.fg("warning", effectiveModel) + th.fg("dim", " ✎")
 				: effectiveModel;
 			const modelLabel = th.fg("dim", "model: ");
-			lines.push(this.row(`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`));
+			lines.push(
+				this.row(
+					`     ${modelLabel}${truncateToWidth(modelValue, innerW - 13)}`,
+				),
+			);
 
-			const writesValue = behavior.output === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.output || th.fg("dim", "(none)"));
+			const writesValue =
+				behavior.output === false
+					? th.fg("dim", "(disabled)")
+					: behavior.output || th.fg("dim", "(none)");
 			const writesLabel = th.fg("dim", "writes: ");
-			lines.push(this.row(`     ${writesLabel}${truncateToWidth(writesValue, innerW - 14)}`));
+			lines.push(
+				this.row(
+					`     ${writesLabel}${truncateToWidth(writesValue, innerW - 14)}`,
+				),
+			);
 
-			const readsValue = behavior.reads === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.reads && behavior.reads.length > 0
-					? behavior.reads.join(", ")
-					: th.fg("dim", "(none)"));
+			const readsValue =
+				behavior.reads === false
+					? th.fg("dim", "(disabled)")
+					: behavior.reads && behavior.reads.length > 0
+						? behavior.reads.join(", ")
+						: th.fg("dim", "(none)");
 			const readsLabel = th.fg("dim", "reads: ");
-			lines.push(this.row(`     ${readsLabel}${truncateToWidth(readsValue, innerW - 13)}`));
+			lines.push(
+				this.row(
+					`     ${readsLabel}${truncateToWidth(readsValue, innerW - 13)}`,
+				),
+			);
 
-			const skillsValue = behavior.skills === false
-				? th.fg("dim", "(disabled)")
-				: (behavior.skills?.length ? behavior.skills.join(", ") : th.fg("dim", "(none)"));
+			const skillsValue =
+				behavior.skills === false
+					? th.fg("dim", "(disabled)")
+					: behavior.skills?.length
+						? behavior.skills.join(", ")
+						: th.fg("dim", "(none)");
 			const skillsLabel = th.fg("dim", "skills: ");
-			lines.push(this.row(`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`));
+			lines.push(
+				this.row(
+					`     ${skillsLabel}${truncateToWidth(skillsValue, innerW - 14)}`,
+				),
+			);
 
 			if (progressEnabled) {
 				const isFirstStep = i === 0;
-				const progressAction = isFirstStep 
+				const progressAction = isFirstStep
 					? th.fg("success", "writes progress.md")
 					: th.fg("accent", "reads progress.md");
 				const progressLabel = th.fg("dim", "progress: ");
@@ -1314,9 +1644,12 @@ export class ChainClarifyComponent implements Component {
 			}
 
 			if (i < this.agentConfigs.length - 1) {
-				const nextStepUsePrevious = (this.templates[i + 1] ?? "").includes("{previous}");
+				const nextStepUsePrevious = (this.templates[i + 1] ?? "").includes(
+					"{previous}",
+				);
 				if (nextStepUsePrevious) {
-					const indicator = th.fg("dim", "     ↳ response → ") + th.fg("warning", "{previous}");
+					const indicator =
+						th.fg("dim", "     ↳ response → ") + th.fg("warning", "{previous}");
 					lines.push(this.row(indicator));
 				}
 			}

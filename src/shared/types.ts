@@ -84,7 +84,14 @@ export interface ControlEvent {
 	index?: number;
 	runId: string;
 	message: string;
-	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "time_threshold" | "turn_threshold" | "token_threshold";
+	reason?:
+		| "idle"
+		| "completion_guard"
+		| "active_long_running"
+		| "tool_failures"
+		| "time_threshold"
+		| "turn_threshold"
+		| "token_threshold";
 	turns?: number;
 	tokens?: number;
 	toolCount?: number;
@@ -95,7 +102,11 @@ export interface ControlEvent {
 	recentFailureSummary?: string;
 }
 
-export type SubagentResultStatus = "completed" | "failed" | "paused" | "detached";
+export type SubagentResultStatus =
+	| "completed"
+	| "failed"
+	| "paused"
+	| "detached";
 export type SubagentRunMode = "single" | "parallel" | "chain";
 
 export interface SubagentResultIntercomChild {
@@ -226,9 +237,9 @@ export interface Details {
 		artifactPath?: string;
 	};
 	// Chain metadata for observability
-	chainAgents?: string[];      // Agent names in order, e.g., ["scout", "planner"]
-	totalSteps?: number;         // Total steps in chain
-	currentStepIndex?: number;   // 0-indexed current step (for running chains)
+	chainAgents?: string[]; // Agent names in order, e.g., ["scout", "planner"]
+	totalSteps?: number; // Total steps in chain
+	currentStepIndex?: number; // 0-indexed current step (for running chains)
 }
 
 // ============================================================================
@@ -296,7 +307,13 @@ export interface AsyncStatus {
 	parallelGroups?: AsyncParallelGroupStatus[];
 	steps?: Array<{
 		agent: string;
-		status: "pending" | "running" | "complete" | "completed" | "failed" | "paused";
+		status:
+			| "pending"
+			| "running"
+			| "complete"
+			| "completed"
+			| "failed"
+			| "paused";
 		sessionFile?: string;
 		activityState?: ActivityState;
 		lastActivityAt?: number;
@@ -383,23 +400,26 @@ export interface SubagentState {
 	currentSessionId: string | null;
 	asyncJobs: Map<string, AsyncJobState>;
 	foregroundRuns?: Map<string, ForegroundResumeRun>;
-	foregroundControls: Map<string, {
-		runId: string;
-		mode: SubagentRunMode;
-		startedAt: number;
-		updatedAt: number;
-		currentAgent?: string;
-		currentIndex?: number;
-		currentActivityState?: ActivityState;
-		lastActivityAt?: number;
-		currentTool?: string;
-		currentToolStartedAt?: number;
-		currentPath?: string;
-		turnCount?: number;
-		tokens?: number;
-		toolCount?: number;
-		interrupt?: () => boolean;
-	}>;
+	foregroundControls: Map<
+		string,
+		{
+			runId: string;
+			mode: SubagentRunMode;
+			startedAt: number;
+			updatedAt: number;
+			currentAgent?: string;
+			currentIndex?: number;
+			currentActivityState?: ActivityState;
+			lastActivityAt?: number;
+			currentTool?: string;
+			currentToolStartedAt?: number;
+			currentPath?: string;
+			turnCount?: number;
+			tokens?: number;
+			toolCount?: number;
+			interrupt?: () => boolean;
+		}
+	>;
 	lastForegroundControlId: string | null;
 	pendingForegroundControlNotices?: Map<string, ReturnType<typeof setTimeout>>;
 	cleanupTimers: Map<string, ReturnType<typeof setTimeout>>;
@@ -418,8 +438,8 @@ export interface SubagentState {
 // Display
 // ============================================================================
 
-export type DisplayItem = 
-	| { type: "text"; text: string } 
+export type DisplayItem =
+	| { type: "text"; text: string }
 	| { type: "tool"; name: string; args: Record<string, unknown> };
 
 // ============================================================================
@@ -445,7 +465,8 @@ export const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
 export const SUBAGENT_CONTROL_EVENT = "subagent:control-event";
 export const SUBAGENT_CONTROL_INTERCOM_EVENT = "subagent:control-intercom";
 export const SUBAGENT_RESULT_INTERCOM_EVENT = "subagent:result-intercom";
-export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT = "subagent:result-intercom-delivery";
+export const SUBAGENT_RESULT_INTERCOM_DELIVERY_EVENT =
+	"subagent:result-intercom-delivery";
 
 // ============================================================================
 // Execution Options
@@ -457,7 +478,9 @@ export interface RunSyncOptions {
 	interruptSignal?: AbortSignal;
 	allowIntercomDetach?: boolean;
 	intercomEvents?: IntercomEventBus;
-	onUpdate?: (r: import("@earendil-works/pi-agent-core").AgentToolResult<Details>) => void;
+	onUpdate?: (
+		r: import("@earendil-works/pi-agent-core").AgentToolResult<Details>,
+	) => void;
 	onControlEvent?: (event: ControlEvent) => void;
 	controlConfig?: ResolvedControlConfig;
 	intercomSessionName?: string;
@@ -542,9 +565,10 @@ export function resolveTempScopeId(options?: {
 	homedir?: (() => string) | undefined;
 }): string {
 	const env = options?.env ?? process.env;
-	const getuid = options && Object.hasOwn(options, "getuid")
-		? options.getuid
-		: process.getuid?.bind(process);
+	const getuid =
+		options && Object.hasOwn(options, "getuid")
+			? options.getuid
+			: process.getuid?.bind(process);
 	if (typeof getuid === "function") {
 		return `uid-${getuid()}`;
 	}
@@ -554,9 +578,10 @@ export function resolveTempScopeId(options?: {
 		if (value) return `user-${sanitizeTempScopeSegment(value)}`;
 	}
 
-	const userInfo = options && Object.hasOwn(options, "userInfo")
-		? options.userInfo
-		: os.userInfo;
+	const userInfo =
+		options && Object.hasOwn(options, "userInfo")
+			? options.userInfo
+			: os.userInfo;
 	try {
 		const username = userInfo?.().username;
 		if (username) return `user-${sanitizeTempScopeSegment(username)}`;
@@ -567,12 +592,12 @@ export function resolveTempScopeId(options?: {
 	const homedir = env.USERPROFILE ?? env.HOME;
 	if (homedir) return `home-${sanitizeTempScopeSegment(homedir)}`;
 
-	const resolveHomedir = options && Object.hasOwn(options, "homedir")
-		? options.homedir
-		: os.homedir;
+	const resolveHomedir =
+		options && Object.hasOwn(options, "homedir") ? options.homedir : os.homedir;
 	try {
 		const fallbackHomedir = resolveHomedir?.();
-		if (fallbackHomedir) return `home-${sanitizeTempScopeSegment(fallbackHomedir)}`;
+		if (fallbackHomedir)
+			return `home-${sanitizeTempScopeSegment(fallbackHomedir)}`;
 	} catch {
 		// Fall through to the last-resort shared scope.
 	}
@@ -582,7 +607,10 @@ export function resolveTempScopeId(options?: {
 
 const MAX_PARALLEL = 8;
 export const MAX_CONCURRENCY = 4;
-export const TEMP_ROOT_DIR = path.join(os.tmpdir(), `pi-subagents-${resolveTempScopeId()}`);
+export const TEMP_ROOT_DIR = path.join(
+	os.tmpdir(),
+	`pi-subagents-${resolveTempScopeId()}`,
+);
 export const RESULTS_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-results");
 export const ASYNC_DIR = path.join(TEMP_ROOT_DIR, "async-subagent-runs");
 export const CHAIN_RUNS_DIR = path.join(TEMP_ROOT_DIR, "chain-runs");
@@ -597,7 +625,17 @@ export const SLASH_SUBAGENT_CANCEL_EVENT = "subagent:slash:cancel";
 export const POLL_INTERVAL_MS = 250;
 export const MAX_WIDGET_JOBS = 4;
 export const DEFAULT_SUBAGENT_MAX_DEPTH = 2;
-export const SUBAGENT_ACTIONS = ["list", "get", "create", "update", "delete", "status", "interrupt", "resume", "doctor"] as const;
+export const SUBAGENT_ACTIONS = [
+	"list",
+	"get",
+	"create",
+	"update",
+	"delete",
+	"status",
+	"interrupt",
+	"resume",
+	"doctor",
+] as const;
 
 export const DEFAULT_FORK_PREAMBLE =
 	"You are a delegated subagent running from a fork of the parent session. " +
@@ -606,7 +644,12 @@ export const DEFAULT_FORK_PREAMBLE =
 	"Your sole job is to execute the task below and return a focused result for that task using your tools.";
 
 function normalizeTopLevelParallelValue(value: unknown): number | undefined {
-	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+	const parsed =
+		typeof value === "number"
+			? value
+			: typeof value === "string"
+				? Number(value)
+				: NaN;
 	if (!Number.isInteger(parsed) || parsed < 1) return undefined;
 	return parsed;
 }
@@ -619,9 +662,11 @@ export function resolveTopLevelParallelConcurrency(
 	override: unknown,
 	configValue: unknown,
 ): number {
-	return normalizeTopLevelParallelValue(override)
-		?? normalizeTopLevelParallelValue(configValue)
-		?? MAX_CONCURRENCY;
+	return (
+		normalizeTopLevelParallelValue(override) ??
+		normalizeTopLevelParallelValue(configValue) ??
+		MAX_CONCURRENCY
+	);
 }
 
 export function getAsyncConfigPath(suffix: string): string {
@@ -641,24 +686,43 @@ export function wrapForkTask(task: string, preamble?: string | false): string {
 // ============================================================================
 
 export function normalizeMaxSubagentDepth(value: unknown): number | undefined {
-	const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+	const parsed =
+		typeof value === "number"
+			? value
+			: typeof value === "string"
+				? Number(value)
+				: NaN;
 	if (!Number.isInteger(parsed) || parsed < 0) return undefined;
 	return parsed;
 }
 
-export function resolveCurrentMaxSubagentDepth(configMaxDepth?: number): number {
-	return normalizeMaxSubagentDepth(process.env.PI_SUBAGENT_MAX_DEPTH)
-		?? normalizeMaxSubagentDepth(configMaxDepth)
-		?? DEFAULT_SUBAGENT_MAX_DEPTH;
+export function resolveCurrentMaxSubagentDepth(
+	configMaxDepth?: number,
+): number {
+	return (
+		normalizeMaxSubagentDepth(process.env.PI_SUBAGENT_MAX_DEPTH) ??
+		normalizeMaxSubagentDepth(configMaxDepth) ??
+		DEFAULT_SUBAGENT_MAX_DEPTH
+	);
 }
 
-export function resolveChildMaxSubagentDepth(parentMaxDepth: number, agentMaxDepth?: number): number {
-	const normalizedParent = normalizeMaxSubagentDepth(parentMaxDepth) ?? DEFAULT_SUBAGENT_MAX_DEPTH;
+export function resolveChildMaxSubagentDepth(
+	parentMaxDepth: number,
+	agentMaxDepth?: number,
+): number {
+	const normalizedParent =
+		normalizeMaxSubagentDepth(parentMaxDepth) ?? DEFAULT_SUBAGENT_MAX_DEPTH;
 	const normalizedAgent = normalizeMaxSubagentDepth(agentMaxDepth);
-	return normalizedAgent === undefined ? normalizedParent : Math.min(normalizedParent, normalizedAgent);
+	return normalizedAgent === undefined
+		? normalizedParent
+		: Math.min(normalizedParent, normalizedAgent);
 }
 
-export function checkSubagentDepth(configMaxDepth?: number): { blocked: boolean; depth: number; maxDepth: number } {
+export function checkSubagentDepth(configMaxDepth?: number): {
+	blocked: boolean;
+	depth: number;
+	maxDepth: number;
+} {
 	const depth = Number(process.env.PI_SUBAGENT_DEPTH ?? "0");
 	const maxDepth = resolveCurrentMaxSubagentDepth(configMaxDepth);
 	const blocked = Number.isFinite(depth) && depth >= maxDepth;
@@ -670,7 +734,9 @@ export function getSubagentDepthEnv(maxDepth?: number): Record<string, string> {
 	const nextDepth = Number.isFinite(parentDepth) ? parentDepth + 1 : 1;
 	return {
 		PI_SUBAGENT_DEPTH: String(nextDepth),
-		PI_SUBAGENT_MAX_DEPTH: String(normalizeMaxSubagentDepth(maxDepth) ?? resolveCurrentMaxSubagentDepth()),
+		PI_SUBAGENT_MAX_DEPTH: String(
+			normalizeMaxSubagentDepth(maxDepth) ?? resolveCurrentMaxSubagentDepth(),
+		),
 	};
 }
 

@@ -40,13 +40,29 @@ import {
 	extractToolArgsPreview,
 	extractTextFromContent,
 } from "../../shared/utils.ts";
-import { buildSkillInjection, resolveSkillsWithFallback } from "../../agents/skills.ts";
+import {
+	buildSkillInjection,
+	resolveSkillsWithFallback,
+} from "../../agents/skills.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
-import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
-import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { captureSingleOutputSnapshot, formatSavedOutputReference, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
+import {
+	attachPostExitStdioGuard,
+	trySignalChild,
+} from "../../shared/post-exit-stdio-guard.ts";
+import {
+	applyThinkingSuffix,
+	buildPiArgs,
+	cleanupTempDir,
+} from "../shared/pi-args.ts";
+import {
+	captureSingleOutputSnapshot,
+	formatSavedOutputReference,
+	resolveSingleOutput,
+	validateFileOnlyOutputMode,
+	type SingleOutputSnapshot,
+} from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
 	formatModelAttemptNote,
@@ -67,7 +83,14 @@ import {
 const artifactOutputByResult = new WeakMap<SingleResult, string>();
 
 function emptyUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		cost: 0,
+		turns: 0,
+	};
 }
 
 function sumUsage(target: Usage, source: Usage): void {
@@ -96,25 +119,43 @@ function snapshotProgress(progress: AgentProgress): AgentProgress {
 	};
 }
 
-function snapshotResult(result: SingleResult, progress: AgentProgress): SingleResult {
+function snapshotResult(
+	result: SingleResult,
+	progress: AgentProgress,
+): SingleResult {
 	return {
 		...result,
-		messages: result.outputMode === "file-only" && result.savedOutputPath ? undefined : result.messages ? [...result.messages] : undefined,
+		messages:
+			result.outputMode === "file-only" && result.savedOutputPath
+				? undefined
+				: result.messages
+					? [...result.messages]
+					: undefined,
 		usage: { ...result.usage },
 		skills: result.skills ? [...result.skills] : undefined,
-		attemptedModels: result.attemptedModels ? [...result.attemptedModels] : undefined,
+		attemptedModels: result.attemptedModels
+			? [...result.attemptedModels]
+			: undefined,
 		modelAttempts: result.modelAttempts
 			? result.modelAttempts.map((attempt) => ({
-				...attempt,
-				usage: attempt.usage ? { ...attempt.usage } : undefined,
-			}))
+					...attempt,
+					usage: attempt.usage ? { ...attempt.usage } : undefined,
+				}))
 			: undefined,
-		controlEvents: result.controlEvents ? result.controlEvents.map((event) => ({ ...event })) : undefined,
+		controlEvents: result.controlEvents
+			? result.controlEvents.map((event) => ({ ...event }))
+			: undefined,
 		progress,
-		progressSummary: result.progressSummary ? { ...result.progressSummary } : undefined,
-		artifactPaths: result.artifactPaths ? { ...result.artifactPaths } : undefined,
+		progressSummary: result.progressSummary
+			? { ...result.progressSummary }
+			: undefined,
+		artifactPaths: result.artifactPaths
+			? { ...result.artifactPaths }
+			: undefined,
 		truncation: result.truncation ? { ...result.truncation } : undefined,
-		outputReference: result.outputReference ? { ...result.outputReference } : undefined,
+		outputReference: result.outputReference
+			? { ...result.outputReference }
+			: undefined,
 	};
 }
 
@@ -136,7 +177,11 @@ async function runSingleAttempt(
 	},
 ): Promise<SingleResult> {
 	const modelArg = applyThinkingSuffix(model, agent.thinking);
-	const { args, env: sharedEnv, tempDir } = buildPiArgs({
+	const {
+		args,
+		env: sharedEnv,
+		tempDir,
+	} = buildPiArgs({
 		baseArgs: ["--mode", "json", "-p"],
 		task,
 		sessionEnabled: shared.sessionEnabled,
@@ -178,7 +223,10 @@ async function runSingleAttempt(
 	const emittedControlEventKeys = new Set<string>();
 	const emitControlEvent = (event: ControlEvent) => {
 		if (!shouldNotifyControlEvent(controlConfig, event)) return;
-		if (!claimControlNotification(controlConfig, event, emittedControlEventKeys)) return;
+		if (
+			!claimControlNotification(controlConfig, event, emittedControlEventKeys)
+		)
+			return;
 		allControlEvents.push(event);
 		pendingControlEvents.push(event);
 		options.onControlEvent?.(event);
@@ -198,7 +246,11 @@ async function runSingleAttempt(
 		lastActivityAt: startTime,
 	};
 	result.progress = progress;
-	const spawnEnv = { ...process.env, ...sharedEnv, ...getSubagentDepthEnv(options.maxSubagentDepth) };
+	const spawnEnv = {
+		...process.env,
+		...sharedEnv,
+		...getSubagentDepthEnv(options.maxSubagentDepth),
+	};
 	let observedMutationAttempt = false;
 
 	const exitCode = await new Promise<number>((resolve) => {
@@ -253,32 +305,54 @@ async function runSingleAttempt(
 			}
 		};
 		const startFinalDrain = () => {
-			if (childExited || finalDrainTimer || settled || processClosed || detached) return;
+			if (
+				childExited ||
+				finalDrainTimer ||
+				settled ||
+				processClosed ||
+				detached
+			)
+				return;
 			finalDrainTimer = setTimeout(() => {
 				if (settled || processClosed || detached) return;
 				const termSent = trySignalChild(proc, "SIGTERM");
 				if (!termSent) return;
 				forcedTerminationSignal = true;
 				if (!cleanTerminalAssistantStopReceived) {
-					result.error = result.error ?? `Subagent process did not exit within ${FINAL_STOP_GRACE_MS}ms after its final message. Forcing termination.`;
+					result.error =
+						result.error ??
+						`Subagent process did not exit within ${FINAL_STOP_GRACE_MS}ms after its final message. Forcing termination.`;
 				}
 				finalHardKillTimer = setTimeout(() => {
 					if (settled || processClosed || detached) return;
-					forcedTerminationSignal = trySignalChild(proc, "SIGKILL") || forcedTerminationSignal;
+					forcedTerminationSignal =
+						trySignalChild(proc, "SIGKILL") || forcedTerminationSignal;
 				}, HARD_KILL_MS);
 				finalHardKillTimer.unref?.();
 			}, FINAL_STOP_GRACE_MS);
 			finalDrainTimer.unref?.();
 		};
 
-		const unsubscribeIntercomDetach = options.intercomEvents?.on?.(INTERCOM_DETACH_REQUEST_EVENT, (payload) => {
-			if (!options.allowIntercomDetach || detached || processClosed || !intercomStarted) return;
-			if (!payload || typeof payload !== "object") return;
-			const requestId = (payload as { requestId?: unknown }).requestId;
-			if (typeof requestId !== "string" || requestId.length === 0) return;
-			options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, { requestId, accepted: true });
-			detachForIntercom();
-		});
+		const unsubscribeIntercomDetach = options.intercomEvents?.on?.(
+			INTERCOM_DETACH_REQUEST_EVENT,
+			(payload) => {
+				if (
+					!options.allowIntercomDetach ||
+					detached ||
+					processClosed ||
+					!intercomStarted
+				)
+					return;
+				if (!payload || typeof payload !== "object") return;
+				const requestId = (payload as { requestId?: unknown }).requestId;
+				if (typeof requestId !== "string" || requestId.length === 0) return;
+				options.intercomEvents?.emit(INTERCOM_DETACH_RESPONSE_EVENT, {
+					requestId,
+					accepted: true,
+				});
+				detachForIntercom();
+			},
+		);
 
 		const finish = (code: number) => {
 			if (settled) return;
@@ -303,11 +377,26 @@ async function runSingleAttempt(
 		};
 
 		let activeLongRunningNotified = false;
-		let pendingToolResult: { tool: string; path?: string; mutates: boolean; startedAt?: number } | undefined;
+		let pendingToolResult:
+			| { tool: string; path?: string; mutates: boolean; startedAt?: number }
+			| undefined;
 		const mutatingFailures = createMutatingFailureState();
 		const mutatingFailureWindowMs = 5 * 60_000;
-		const currentToolDurationMs = (now: number) => progress.currentToolStartedAt ? Math.max(0, now - progress.currentToolStartedAt) : undefined;
-		const emitNeedsAttention = (now: number, input: { message?: string; reason?: ControlEvent["reason"]; recentFailureSummary?: string; currentTool?: string; currentPath?: string; currentToolDurationMs?: number } = {}): boolean => {
+		const currentToolDurationMs = (now: number) =>
+			progress.currentToolStartedAt
+				? Math.max(0, now - progress.currentToolStartedAt)
+				: undefined;
+		const emitNeedsAttention = (
+			now: number,
+			input: {
+				message?: string;
+				reason?: ControlEvent["reason"];
+				recentFailureSummary?: string;
+				currentTool?: string;
+				currentPath?: string;
+				currentToolDurationMs?: number;
+			} = {},
+		): boolean => {
 			if (!controlConfig.enabled) return false;
 			const previous = progress.activityState;
 			progress.activityState = "needs_attention";
@@ -326,36 +415,47 @@ async function runSingleAttempt(
 				tokens: progress.tokens,
 				toolCount: progress.toolCount,
 				currentTool: input.currentTool ?? progress.currentTool,
-				currentToolDurationMs: input.currentToolDurationMs ?? currentToolDurationMs(now),
+				currentToolDurationMs:
+					input.currentToolDurationMs ?? currentToolDurationMs(now),
 				currentPath: input.currentPath ?? progress.currentPath,
 				recentFailureSummary: input.recentFailureSummary,
 			});
 			emitControlEvent(event);
 			return previous !== "needs_attention";
 		};
-		const emitActiveLongRunning = (now: number, reason: ControlEvent["reason"]): boolean => {
-			if (!controlConfig.enabled || activeLongRunningNotified || progress.activityState === "needs_attention") return false;
+		const emitActiveLongRunning = (
+			now: number,
+			reason: ControlEvent["reason"],
+		): boolean => {
+			if (
+				!controlConfig.enabled ||
+				activeLongRunningNotified ||
+				progress.activityState === "needs_attention"
+			)
+				return false;
 			activeLongRunningNotified = true;
 			const previous = progress.activityState;
 			progress.activityState = "active_long_running";
-			emitControlEvent(buildControlEvent({
-				type: "active_long_running",
-				from: previous,
-				to: "active_long_running",
-				runId: options.runId,
-				agent: agent.name,
-				index: options.index,
-				ts: now,
-				message: `${agent.name} is still active but long-running`,
-				reason,
-				turns: result.usage.turns,
-				tokens: progress.tokens,
-				toolCount: progress.toolCount,
-				currentTool: progress.currentTool,
-				currentToolDurationMs: currentToolDurationMs(now),
-				currentPath: progress.currentPath,
-				elapsedMs: now - startTime,
-			}));
+			emitControlEvent(
+				buildControlEvent({
+					type: "active_long_running",
+					from: previous,
+					to: "active_long_running",
+					runId: options.runId,
+					agent: agent.name,
+					index: options.index,
+					ts: now,
+					message: `${agent.name} is still active but long-running`,
+					reason,
+					turns: result.usage.turns,
+					tokens: progress.tokens,
+					toolCount: progress.toolCount,
+					currentTool: progress.currentTool,
+					currentToolDurationMs: currentToolDurationMs(now),
+					currentPath: progress.currentPath,
+					elapsedMs: now - startTime,
+				}),
+			);
 			return true;
 		};
 		const updateActivityState = (now: number): boolean => {
@@ -367,7 +467,9 @@ async function runSingleAttempt(
 				now,
 			});
 			if (idleState === "needs_attention") {
-				return progress.activityState === "needs_attention" ? false : emitNeedsAttention(now);
+				return progress.activityState === "needs_attention"
+					? false
+					: emitNeedsAttention(now);
 			}
 			const activeReason = nextLongRunningTrigger(controlConfig, {
 				startedAt: startTime,
@@ -377,7 +479,6 @@ async function runSingleAttempt(
 			});
 			return activeReason ? emitActiveLongRunning(now, activeReason) : false;
 		};
-
 
 		const emitUpdateSnapshot = (text: string) => {
 			if (!options.onUpdate || processClosed) return;
@@ -404,9 +505,19 @@ async function runSingleAttempt(
 		const processLine = (line: string) => {
 			if (!line.trim()) return;
 			jsonlWriter.writeLine(line);
-			let evt: { type?: string; message?: Message; toolName?: string; args?: unknown };
+			let evt: {
+				type?: string;
+				message?: Message;
+				toolName?: string;
+				args?: unknown;
+			};
 			try {
-				evt = JSON.parse(line) as { type?: string; message?: Message; toolName?: string; args?: unknown };
+				evt = JSON.parse(line) as {
+					type?: string;
+					message?: Message;
+					toolName?: string;
+					args?: unknown;
+				};
 			} catch {
 				// Non-JSON stdout lines are expected; only structured events are parsed.
 				return;
@@ -418,10 +529,14 @@ async function runSingleAttempt(
 			updateActivityState(now);
 
 			if (evt.type === "tool_execution_start") {
-				const toolArgs = evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
-					? evt.args as Record<string, unknown>
-					: {};
-				if (options.allowIntercomDetach && (evt.toolName === "intercom" || evt.toolName === "contact_supervisor")) {
+				const toolArgs =
+					evt.args && typeof evt.args === "object" && !Array.isArray(evt.args)
+						? (evt.args as Record<string, unknown>)
+						: {};
+				if (
+					options.allowIntercomDetach &&
+					(evt.toolName === "intercom" || evt.toolName === "contact_supervisor")
+				) {
 					intercomStarted = true;
 				}
 				progress.toolCount++;
@@ -431,7 +546,12 @@ async function runSingleAttempt(
 				progress.currentPath = resolveCurrentPath(evt.toolName, toolArgs);
 				const mutates = isMutatingTool(evt.toolName, toolArgs);
 				observedMutationAttempt = observedMutationAttempt || mutates;
-				pendingToolResult = { tool: evt.toolName ?? "tool", path: progress.currentPath, mutates, startedAt: now };
+				pendingToolResult = {
+					tool: evt.toolName ?? "tool",
+					path: progress.currentPath,
+					mutates,
+					startedAt: now,
+				};
 				fireUpdate();
 			}
 
@@ -464,13 +584,21 @@ async function runSingleAttempt(
 						result.usage.cost += u.cost?.total || 0;
 						progress.tokens = result.usage.input + result.usage.output;
 					}
-					if (!result.model && evt.message.model) result.model = evt.message.model;
+					if (!result.model && evt.message.model)
+						result.model = evt.message.model;
 					if (evt.message.errorMessage) result.error = evt.message.errorMessage;
-					appendRecentOutput(progress, extractTextFromContent(evt.message.content).split("\n").slice(-10));
+					appendRecentOutput(
+						progress,
+						extractTextFromContent(evt.message.content).split("\n").slice(-10),
+					);
 					// Final assistant message: start the exit drain window.
-					const stopReason = (evt.message as { stopReason?: string }).stopReason;
-					const hasToolCall = Array.isArray(evt.message.content)
-						&& evt.message.content.some((part) => (part as { type?: string }).type === "toolCall");
+					const stopReason = (evt.message as { stopReason?: string })
+						.stopReason;
+					const hasToolCall =
+						Array.isArray(evt.message.content) &&
+						evt.message.content.some(
+							(part) => (part as { type?: string }).type === "toolCall",
+						);
 					if (stopReason === "stop" && !hasToolCall) {
 						cleanTerminalAssistantStopReceived ||= !evt.message.errorMessage;
 						startFinalDrain();
@@ -487,20 +615,37 @@ async function runSingleAttempt(
 				const toolSnapshot = pendingToolResult;
 				pendingToolResult = undefined;
 				if (toolSnapshot?.mutates && didMutatingToolFail(resultText)) {
-					recordMutatingFailure(mutatingFailures, {
-						tool: toolSnapshot.tool,
-						path: toolSnapshot.path,
-						error: resultText.split("\n").find((line) => line.trim())?.trim().slice(0, 180) ?? "mutating tool failed",
-						ts: now,
-					}, mutatingFailureWindowMs);
-					if (shouldEscalateMutatingFailures(mutatingFailures, controlConfig.failedToolAttemptsBeforeAttention)) {
+					recordMutatingFailure(
+						mutatingFailures,
+						{
+							tool: toolSnapshot.tool,
+							path: toolSnapshot.path,
+							error:
+								resultText
+									.split("\n")
+									.find((line) => line.trim())
+									?.trim()
+									.slice(0, 180) ?? "mutating tool failed",
+							ts: now,
+						},
+						mutatingFailureWindowMs,
+					);
+					if (
+						shouldEscalateMutatingFailures(
+							mutatingFailures,
+							controlConfig.failedToolAttemptsBeforeAttention,
+						)
+					) {
 						emitNeedsAttention(now, {
 							message: `${agent.name} needs attention after repeated mutating tool failures`,
 							reason: "tool_failures",
 							currentTool: toolSnapshot.tool,
 							currentPath: toolSnapshot.path,
-							currentToolDurationMs: toolSnapshot.startedAt ? Math.max(0, now - toolSnapshot.startedAt) : undefined,
-							recentFailureSummary: summarizeRecentMutatingFailures(mutatingFailures),
+							currentToolDurationMs: toolSnapshot.startedAt
+								? Math.max(0, now - toolSnapshot.startedAt)
+								: undefined,
+							recentFailureSummary:
+								summarizeRecentMutatingFailures(mutatingFailures),
 						});
 					}
 				} else if (toolSnapshot?.mutates) {
@@ -524,7 +669,10 @@ async function runSingleAttempt(
 
 		let stderrBuf = "";
 
-		const clearStdioGuard = attachPostExitStdioGuard(proc, { idleMs: 2000, hardMs: 8000 });
+		const clearStdioGuard = attachPostExitStdioGuard(proc, {
+			idleMs: 2000,
+			hardMs: 8000,
+		});
 		proc.stdout.on("data", (d) => {
 			buf += d.toString();
 			const lines = buf.split("\n");
@@ -551,11 +699,23 @@ async function runSingleAttempt(
 			}
 			processClosed = true;
 			if (buf.trim()) processLine(buf);
-			const forcedDrainAfterFinalSuccess = forcedTerminationSignal && cleanTerminalAssistantStopReceived && !result.error;
-			if (code !== 0 && stderrBuf.trim() && !result.error && !forcedDrainAfterFinalSuccess) {
+			const forcedDrainAfterFinalSuccess =
+				forcedTerminationSignal &&
+				cleanTerminalAssistantStopReceived &&
+				!result.error;
+			if (
+				code !== 0 &&
+				stderrBuf.trim() &&
+				!result.error &&
+				!forcedDrainAfterFinalSuccess
+			) {
 				result.error = stderrBuf.trim();
 			}
-			const finalCode = forcedDrainAfterFinalSuccess ? 0 : forcedTerminationSignal || signal ? (code ?? 1) : (code ?? 0);
+			const finalCode = forcedDrainAfterFinalSuccess
+				? 0
+				: forcedTerminationSignal || signal
+					? (code ?? 1)
+					: (code ?? 0);
 			finish(finalCode);
 		});
 		proc.on("error", (error) => {
@@ -584,7 +744,8 @@ async function runSingleAttempt(
 			if (options.signal.aborted) kill();
 			else {
 				options.signal.addEventListener("abort", kill, { once: true });
-				removeAbortListener = () => options.signal?.removeEventListener("abort", kill);
+				removeAbortListener = () =>
+					options.signal?.removeEventListener("abort", kill);
 			}
 		}
 
@@ -606,8 +767,11 @@ async function runSingleAttempt(
 			};
 			if (options.interruptSignal.aborted) interrupt();
 			else {
-				options.interruptSignal.addEventListener("abort", interrupt, { once: true });
-				removeInterruptListener = () => options.interruptSignal?.removeEventListener("abort", interrupt);
+				options.interruptSignal.addEventListener("abort", interrupt, {
+					once: true,
+				});
+				removeInterruptListener = () =>
+					options.interruptSignal?.removeEventListener("abort", interrupt);
 			}
 		}
 	});
@@ -616,8 +780,11 @@ async function runSingleAttempt(
 		result.exitCode = 0;
 		result.interrupted = true;
 		result.error = undefined;
-		result.finalOutput = result.finalOutput || "Interrupted. Waiting for explicit next action.";
-		result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
+		result.finalOutput =
+			result.finalOutput || "Interrupted. Waiting for explicit next action.";
+		result.controlEvents = allControlEvents.length
+			? allControlEvents
+			: undefined;
 		progress.activityState = undefined;
 		progress.durationMs = Date.now() - startTime;
 		result.progressSummary = {
@@ -662,39 +829,57 @@ async function runSingleAttempt(
 	};
 
 	let fullOutput = getFinalOutput(result.messages);
-	const completionGuard = result.exitCode === 0 && !result.error
-		? evaluateCompletionMutationGuard({ agent: agent.name, task, messages: result.messages })
-		: undefined;
+	const completionGuard =
+		result.exitCode === 0 && !result.error
+			? evaluateCompletionMutationGuard({
+					agent: agent.name,
+					task,
+					messages: result.messages,
+				})
+			: undefined;
 	if (completionGuard?.triggered && !observedMutationAttempt) {
 		result.exitCode = 1;
-		result.error = "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes.";
+		result.error =
+			"Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes.";
 		progress.status = "failed";
 		progress.error = result.error;
-		emitControlEvent(buildControlEvent({
-			from: progress.activityState,
-			to: "needs_attention",
-			runId: options.runId ?? agent.name,
-			agent: agent.name,
-			index: options.index,
-			ts: Date.now(),
-			message: `${agent.name} completed without making edits for an implementation task`,
-			reason: "completion_guard",
-		}));
+		emitControlEvent(
+			buildControlEvent({
+				from: progress.activityState,
+				to: "needs_attention",
+				runId: options.runId ?? agent.name,
+				agent: agent.name,
+				index: options.index,
+				ts: Date.now(),
+				message: `${agent.name} completed without making edits for an implementation task`,
+				reason: "completion_guard",
+			}),
+		);
 	}
 	if (options.outputPath && result.exitCode === 0) {
-		const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
+		const resolvedOutput = resolveSingleOutput(
+			options.outputPath,
+			fullOutput,
+			shared.outputSnapshot,
+		);
 		fullOutput = resolvedOutput.fullOutput;
 		result.savedOutputPath = resolvedOutput.savedPath;
 		result.outputSaveError = resolvedOutput.saveError;
 		if (resolvedOutput.savedPath) {
-			result.outputReference = formatSavedOutputReference(resolvedOutput.savedPath, fullOutput);
+			result.outputReference = formatSavedOutputReference(
+				resolvedOutput.savedPath,
+				fullOutput,
+			);
 		}
 	}
 	artifactOutputByResult.set(result, fullOutput);
 	result.outputMode = options.outputMode ?? "inline";
-	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
-		? result.outputReference.message
-		: fullOutput;
+	result.finalOutput =
+		options.outputMode === "file-only" &&
+		result.savedOutputPath &&
+		result.outputReference
+			? result.outputReference.message
+			: fullOutput;
 	result.controlEvents = allControlEvents.length ? allControlEvents : undefined;
 	if (options.onUpdate) {
 		const finalText = result.finalOutput || result.error || "(no output)";
@@ -734,7 +919,11 @@ export async function runSync(
 			error: `Unknown agent: ${agentName}`,
 		};
 	}
-	const outputModeValidationError = validateFileOnlyOutputMode(options.outputMode, options.outputPath, `Single run (${agentName})`);
+	const outputModeValidationError = validateFileOnlyOutputMode(
+		options.outputMode,
+		options.outputPath,
+		`Single run (${agentName})`,
+	);
 	if (outputModeValidationError) {
 		return {
 			agent: agentName,
@@ -748,11 +937,16 @@ export async function runSync(
 	}
 
 	const shareEnabled = options.share === true;
-	const sessionEnabled = Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
+	const sessionEnabled =
+		Boolean(options.sessionFile || options.sessionDir) || shareEnabled;
 	const skillNames = options.skills ?? agent.skills ?? [];
 	const skillCwd = options.cwd ?? runtimeCwd;
-	const { resolved: resolvedSkills, missing: missingSkills } = resolveSkillsWithFallback(skillNames, skillCwd, runtimeCwd);
-	if (skillNames.some((skill) => skill.trim() === "pi-subagents") && missingSkills.includes("pi-subagents")) {
+	const { resolved: resolvedSkills, missing: missingSkills } =
+		resolveSkillsWithFallback(skillNames, skillCwd, runtimeCwd);
+	if (
+		skillNames.some((skill) => skill.trim() === "pi-subagents") &&
+		missingSkills.includes("pi-subagents")
+	) {
 		return {
 			agent: agentName,
 			task,
@@ -765,7 +959,9 @@ export async function runSync(
 	let systemPrompt = agent.systemPrompt?.trim() || "";
 	if (resolvedSkills.length > 0) {
 		const skillInjection = buildSkillInjection(resolvedSkills);
-		systemPrompt = systemPrompt ? `${systemPrompt}\n\n${skillInjection}` : skillInjection;
+		systemPrompt = systemPrompt
+			? `${systemPrompt}\n\n${skillInjection}`
+			: skillInjection;
 	}
 
 	const candidates = buildModelCandidates(
@@ -785,10 +981,18 @@ export async function runSync(
 	let artifactPathsResult: ArtifactPaths | undefined;
 	let jsonlPath: string | undefined;
 	if (options.artifactsDir && options.artifactConfig?.enabled !== false) {
-		artifactPathsResult = getArtifactPaths(options.artifactsDir, options.runId, agentName, options.index);
+		artifactPathsResult = getArtifactPaths(
+			options.artifactsDir,
+			options.runId,
+			agentName,
+			options.index,
+		);
 		ensureArtifactsDir(options.artifactsDir);
 		if (options.artifactConfig?.includeInput !== false) {
-			writeArtifact(artifactPathsResult.inputPath, `# Task for ${agentName}\n\n${task}`);
+			writeArtifact(
+				artifactPathsResult.inputPath,
+				`# Task for ${agentName}\n\n${task}`,
+			);
 		}
 		if (options.artifactConfig?.includeJsonl !== false) {
 			jsonlPath = artifactPathsResult.jsonlPath;
@@ -801,16 +1005,29 @@ export async function runSync(
 		const candidate = modelsToTry[i];
 		if (candidate) attemptedModels.push(candidate);
 		const outputSnapshot = captureSingleOutputSnapshot(options.outputPath);
-		const result = await runSingleAttempt(runtimeCwd, agent, task, candidate, options, {
-			sessionEnabled,
-			systemPrompt,
-			resolvedSkillNames: resolvedSkills.length > 0 ? resolvedSkills.map((skill) => skill.name) : undefined,
-			skillsWarning: missingSkills.length > 0 ? `Skills not found: ${missingSkills.join(", ")}` : undefined,
-			jsonlPath,
-			artifactPaths: artifactPathsResult,
-			attemptNotes,
-			outputSnapshot,
-		});
+		const result = await runSingleAttempt(
+			runtimeCwd,
+			agent,
+			task,
+			candidate,
+			options,
+			{
+				sessionEnabled,
+				systemPrompt,
+				resolvedSkillNames:
+					resolvedSkills.length > 0
+						? resolvedSkills.map((skill) => skill.name)
+						: undefined,
+				skillsWarning:
+					missingSkills.length > 0
+						? `Skills not found: ${missingSkills.join(", ")}`
+						: undefined,
+				jsonlPath,
+				artifactPaths: artifactPathsResult,
+				attemptNotes,
+				outputSnapshot,
+			},
+		);
 		lastResult = result;
 		sumUsage(aggregateUsage, result.usage);
 		totalToolCount += result.progressSummary?.toolCount ?? 0;
@@ -827,23 +1044,29 @@ export async function runSync(
 		if (attemptSucceeded) {
 			break;
 		}
-		if (!isRetryableModelFailure(result.error) || i === modelsToTry.length - 1) {
+		if (
+			!isRetryableModelFailure(result.error) ||
+			i === modelsToTry.length - 1
+		) {
 			break;
 		}
 		attemptNotes.push(formatModelAttemptNote(attempt, modelsToTry[i + 1]));
 	}
 
-	const result = lastResult ?? {
-		agent: agentName,
-		task,
-		exitCode: 1,
-		messages: [],
-		usage: emptyUsage(),
-		error: "Subagent did not produce a result.",
-	} satisfies SingleResult;
+	const result =
+		lastResult ??
+		({
+			agent: agentName,
+			task,
+			exitCode: 1,
+			messages: [],
+			usage: emptyUsage(),
+			error: "Subagent did not produce a result.",
+		} satisfies SingleResult);
 
 	result.usage = aggregateUsage;
-	result.attemptedModels = attemptedModels.length > 0 ? attemptedModels : undefined;
+	result.attemptedModels =
+		attemptedModels.length > 0 ? attemptedModels : undefined;
 	result.modelAttempts = modelAttempts.length > 0 ? modelAttempts : undefined;
 	result.progressSummary = {
 		toolCount: totalToolCount,
@@ -851,7 +1074,10 @@ export async function runSync(
 		durationMs: totalDurationMs,
 	};
 	if (attemptNotes.length > 0 && result.progress) {
-		result.progress.recentOutput = [...attemptNotes, ...result.progress.recentOutput];
+		result.progress.recentOutput = [
+			...attemptNotes,
+			...result.progress.recentOutput,
+		];
 		if (result.progress.recentOutput.length > 50) {
 			result.progress.recentOutput.splice(50);
 		}
@@ -860,7 +1086,10 @@ export async function runSync(
 	if (artifactPathsResult && options.artifactConfig?.enabled !== false) {
 		result.artifactPaths = artifactPathsResult;
 		if (options.artifactConfig?.includeOutput !== false) {
-			writeArtifact(artifactPathsResult.outputPath, artifactOutputByResult.get(result) ?? result.finalOutput ?? "");
+			writeArtifact(
+				artifactPathsResult.outputPath,
+				artifactOutputByResult.get(result) ?? result.finalOutput ?? "",
+			);
 		}
 		if (options.artifactConfig?.includeMetadata !== false) {
 			writeMetadata(artifactPathsResult.metadataPath, {
@@ -883,7 +1112,11 @@ export async function runSync(
 
 		if (options.maxOutput) {
 			const config = { ...DEFAULT_MAX_OUTPUT, ...options.maxOutput };
-			const truncationResult = truncateOutput(result.finalOutput ?? "", config, artifactPathsResult.outputPath);
+			const truncationResult = truncateOutput(
+				result.finalOutput ?? "",
+				config,
+				artifactPathsResult.outputPath,
+			);
 			if (truncationResult.truncated) result.truncation = truncationResult;
 		}
 	} else if (options.maxOutput) {
@@ -892,7 +1125,10 @@ export async function runSync(
 		if (truncationResult.truncated) result.truncation = truncationResult;
 	}
 
-	if (options.sessionFile && (existsSync(options.sessionFile) || result.messages?.length)) {
+	if (
+		options.sessionFile &&
+		(existsSync(options.sessionFile) || result.messages?.length)
+	) {
 		result.sessionFile = options.sessionFile;
 	} else if (shareEnabled && options.sessionDir) {
 		const sessionFile = findLatestSessionFile(options.sessionDir);
