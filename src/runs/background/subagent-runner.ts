@@ -8,6 +8,15 @@ import { appendJsonl, getArtifactPaths } from "../../shared/artifacts.ts";
 import { PI_CODING_AGENT_PACKAGE, getPiSpawnCommand, resolveInstalledPiPackageRoot } from "../shared/pi-spawn.ts";
 import { captureSingleOutputSnapshot, finalizeSingleOutput, formatSavedOutputReference, resolveSingleOutput, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
+	buildOutcome,
+	legacyError,
+	legacyExitCode,
+	resolveOutcomeTerminal,
+	type ResolvedOutput,
+	type RunOutcome,
+	type RunWarning,
+} from "../shared/run-outcome.ts";
+import {
 	type ActivityState,
 	type ArtifactConfig,
 	type ArtifactPaths,
@@ -40,7 +49,7 @@ import {
 	MAX_PARALLEL_CONCURRENCY,
 } from "../shared/parallel-utils.ts";
 import { buildPiArgs, cleanupTempDir } from "../shared/pi-args.ts";
-import { formatModelAttemptNote, isRetryableModelFailure } from "../shared/model-fallback.ts";
+import { classifyAttemptFailure, formatModelAttemptNote, isRetryableModelFailure } from "../shared/model-fallback.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
 import { detectSubagentError, extractTextFromContent, extractToolArgsPreview, getFinalOutput } from "../../shared/utils.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
@@ -94,6 +103,23 @@ interface SubagentRunConfig {
 	resultMode?: SubagentRunMode;
 }
 
+// Map a run outcome to status.json step status (succeeded → complete,
+// aborted → paused, failed → failed). Used to keep async status honest
+// for interrupted runs (legacyExitCode of aborted is 0 by design).
+function outcomeToStepStatus(outcome: RunOutcome | undefined, fallbackExitCode: number | null): "complete" | "failed" | "paused" {
+	if (outcome?.kind === "succeeded") return "complete";
+	if (outcome?.kind === "aborted") return "paused";
+	if (outcome?.kind === "failed") return "failed";
+	return fallbackExitCode === 0 ? "complete" : "failed";
+}
+
+function outcomeToEventType(outcome: RunOutcome | undefined, fallbackExitCode: number | null): "subagent.step.completed" | "subagent.step.failed" | "subagent.step.paused" {
+	if (outcome?.kind === "aborted") return "subagent.step.paused";
+	if (outcome?.kind === "failed") return "subagent.step.failed";
+	if (outcome?.kind === "succeeded") return "subagent.step.completed";
+	return fallbackExitCode === 0 ? "subagent.step.completed" : "subagent.step.failed";
+}
+
 interface StepResult {
 	agent: string;
 	output: string;
@@ -102,6 +128,8 @@ interface StepResult {
 	skipped?: boolean;
 	sessionFile?: string;
 	intercomTarget?: string;
+	outcome?: RunOutcome;
+	unexpectedMutation?: boolean;
 	model?: string;
 	attemptedModels?: string[];
 	modelAttempts?: ModelAttempt[];
@@ -574,7 +602,8 @@ async function runSingleStep(
 	interrupted?: boolean;
 	sessionFile?: string;
 	intercomTarget?: string;
-	completionGuardTriggered?: boolean;
+	outcome: RunOutcome;
+	unexpectedMutation?: boolean;
 }> {
 	const placeholderRegex = new RegExp(ctx.placeholder.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "g");
 	const task = step.task.replace(placeholderRegex, () => ctx.previousOutput);
@@ -602,7 +631,6 @@ async function runSingleStep(
 	const eventsPath = path.join(path.dirname(ctx.outputFile), "events.jsonl");
 	let finalResult: RunPiStreamingResult | undefined;
 	let finalOutputSnapshot: SingleOutputSnapshot | undefined;
-	let completionGuardTriggeredFinal = false;
 
 	for (let index = 0; index < candidates.length; index++) {
 		const candidate = candidates[index];
@@ -644,57 +672,97 @@ async function runSingleStep(
 		);
 		cleanupTempDir(tempDir);
 
-		const hiddenError = run.exitCode === 0 && !run.error ? detectSubagentError(run.messages) : null;
-		const completionGuard = run.exitCode === 0 && !run.error && !hiddenError?.hasError && step.completionGuard !== false
-			? evaluateCompletionMutationGuard({
-				agent: step.agent,
-				task,
-				messages: run.messages,
-				tools: step.tools,
-				extensions: step.extensions,
-				mcpDirectTools: step.mcpDirectTools,
-			})
-			: undefined;
-		const completionGuardTriggered = completionGuard?.triggered === true && !run.observedMutationAttempt;
-		const completionGuardError = completionGuardTriggered
-			? "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes."
-			: undefined;
-		const effectiveExitCode = completionGuardTriggered
-			? 1
-			: hiddenError?.hasError
-				? (hiddenError.exitCode ?? 1)
-				: run.error && run.exitCode === 0
-					? 1
-					: run.exitCode;
-		const error = completionGuardError
-			?? (hiddenError?.hasError
-				? hiddenError.details
-					? `${hiddenError.errorType} failed (exit ${effectiveExitCode}): ${hiddenError.details}`
-					: `${hiddenError.errorType} failed with exit code ${effectiveExitCode}`
-				: run.error || (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined));
+		const normalizedExitCode = run.error && run.exitCode === 0 ? 1 : run.exitCode;
+		const normalizedError = run.error
+			|| (run.exitCode !== 0 && run.stderr.trim() ? run.stderr.trim() : undefined);
 		const attempt: ModelAttempt = {
 			model: candidate ?? run.model ?? step.model ?? "default",
-			success: effectiveExitCode === 0 && !error,
-			exitCode: effectiveExitCode,
-			error,
+			success: normalizedExitCode === 0 && !normalizedError,
+			exitCode: normalizedExitCode,
+			error: normalizedError,
 			usage: run.usage,
 		};
+		if (!attempt.success) attempt.failure = { kind: classifyAttemptFailure(attempt) };
 		modelAttempts.push(attempt);
 		if (candidate) attemptedModels.push(candidate);
-		completionGuardTriggeredFinal = completionGuardTriggered;
 		finalOutputSnapshot = outputSnapshot;
-		finalResult = { ...run, exitCode: effectiveExitCode, model: candidate ?? run.model, error };
-		if (attempt.success || completionGuardTriggered) break;
-		if (!isRetryableModelFailure(error) || index === candidates.length - 1) break;
+		finalResult = { ...run, exitCode: normalizedExitCode, model: candidate ?? run.model, error: normalizedError };
+		if (attempt.success) break;
+		if (!isRetryableModelFailure(normalizedError) || index === candidates.length - 1) break;
 		attemptNotes.push(formatModelAttemptNote(attempt, candidates[index + 1]));
 	}
 
 	const rawOutput = finalResult?.finalOutput ?? "";
-	const resolvedOutput = step.outputPath && finalResult?.exitCode === 0
+	// (1) Resolve output FIRST — regardless of exitCode (α-2 inversion).
+	const resolvedSave = step.outputPath
 		? resolveSingleOutput(step.outputPath, rawOutput, finalOutputSnapshot)
-		: { fullOutput: rawOutput };
-	const output = resolvedOutput.fullOutput;
-	const outputReference = resolvedOutput.savedPath ? formatSavedOutputReference(resolvedOutput.savedPath, output) : undefined;
+		: { fullOutput: rawOutput, savedPath: undefined as string | undefined, saveError: undefined as string | undefined };
+	const output = resolvedSave.fullOutput;
+	const outputReference = resolvedSave.savedPath ? formatSavedOutputReference(resolvedSave.savedPath, output) : undefined;
+
+	// (2) Evaluate guards on the FINAL run.
+	const completionGuard = finalResult && step.completionGuard !== false
+		? evaluateCompletionMutationGuard({
+			agent: step.agent,
+			task,
+			messages: finalResult.messages,
+			tools: step.tools,
+			extensions: step.extensions,
+			mcpDirectTools: step.mcpDirectTools,
+		})
+		: undefined;
+	const hiddenError = finalResult && !finalResult.error ? detectSubagentError(finalResult.messages) : null;
+	const observedMutationAttempt = finalResult?.observedMutationAttempt === true;
+
+	// (3) Resolve terminal + build outcome.
+	const resolvedOutputForBuilder: ResolvedOutput = {
+		text: output,
+		...(resolvedSave.savedPath !== undefined ? { savedPath: resolvedSave.savedPath } : {}),
+		...(step.outputPath !== undefined ? { requestedPath: step.outputPath } : {}),
+		...(resolvedSave.saveError !== undefined ? { saveError: resolvedSave.saveError } : {}),
+	};
+	const terminal = resolveOutcomeTerminal({
+		rawExitCode: finalResult?.exitCode ?? 1,
+		rawError: finalResult?.error,
+		hiddenToolError: hiddenError?.hasError ? hiddenError : undefined,
+		modelAttempts,
+		completionGuard: completionGuard
+			? {
+				triggered: completionGuard.triggered && !observedMutationAttempt,
+				expectedMutation: completionGuard.expectedMutation,
+				unexpectedMutation: completionGuard.unexpectedMutation,
+			}
+			: undefined,
+		abort: finalResult?.interrupted ? { reason: "interrupt" } : undefined,
+		observedMutationAttempt,
+		resolvedOutput: resolvedOutputForBuilder,
+	});
+	const warnings: RunWarning[] = resolvedSave.saveError && step.outputPath
+		? [{ code: "output_save_failed", path: step.outputPath, detail: resolvedSave.saveError }]
+		: [];
+	const outcome = buildOutcome({
+		terminal,
+		output: resolvedOutputForBuilder,
+		usage: finalResult?.usage ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+		warnings: warnings.length > 0 ? warnings : undefined,
+	});
+
+	// Reflect the run's terminal failure on the final attempt so callers
+	// inspecting `modelAttempts` see the true cause (completion-guard /
+	// tool / internal) rather than a misleadingly-successful last attempt.
+	if (outcome.kind === "failed" && modelAttempts.length > 0) {
+		const last = modelAttempts[modelAttempts.length - 1]!;
+		const kind: "completion_guard" | "tool" | "unknown" =
+			outcome.error.code === "completion_guard_no_mutation" ? "completion_guard"
+			: outcome.error.code === "tool_error" ? "tool"
+			: last.failure?.kind ?? "unknown";
+		if (kind !== "unknown" || !last.failure) {
+			last.success = false;
+			last.error = last.error ?? outcome.error.detail;
+			last.failure = { kind };
+		}
+	}
+
 	let outputForSummary = output;
 	if (attemptNotes.length > 0) {
 		outputForSummary = `${attemptNotes.join("\n")}\n\n${outputForSummary}`.trim();
@@ -703,10 +771,10 @@ async function runSingleStep(
 		fullOutput: outputForSummary,
 		outputPath: step.outputPath,
 		outputMode: step.outputMode,
-		exitCode: finalResult?.exitCode ?? 1,
-		savedPath: resolvedOutput.savedPath,
+		exitCode: legacyExitCode(outcome),
+		savedPath: resolvedSave.savedPath,
 		outputReference,
-		saveError: resolvedOutput.saveError,
+		saveError: resolvedSave.saveError,
 	});
 	outputForSummary = finalizedOutput.displayOutput;
 
@@ -721,7 +789,8 @@ async function runSingleStep(
 					runId: ctx.id,
 					agent: step.agent,
 					task,
-					exitCode: finalResult?.exitCode,
+					exitCode: legacyExitCode(outcome),
+					outcome,
 					model: finalResult?.model,
 					attemptedModels: attemptedModels.length > 0 ? attemptedModels : undefined,
 					modelAttempts,
@@ -736,8 +805,8 @@ async function runSingleStep(
 	return {
 		agent: step.agent,
 		output: outputForSummary,
-		exitCode: finalResult?.exitCode ?? 1,
-		error: finalResult?.error,
+		exitCode: legacyExitCode(outcome),
+		error: legacyError(outcome),
 		sessionFile: step.sessionFile,
 		intercomTarget: ctx.childIntercomTarget,
 		model: finalResult?.model,
@@ -745,7 +814,8 @@ async function runSingleStep(
 		modelAttempts,
 		artifactPaths,
 		interrupted: finalResult?.interrupted,
-		completionGuardTriggered: completionGuardTriggeredFinal,
+		outcome,
+		unexpectedMutation: completionGuard?.unexpectedMutation === true,
 	};
 }
 
@@ -1366,7 +1436,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						const taskEndTime = Date.now();
 						const taskDuration = taskEndTime - taskStartTime;
 
-						statusPayload.steps[fi].status = singleResult.exitCode === 0 ? "complete" : "failed";
+						statusPayload.steps[fi].status = outcomeToStepStatus(singleResult.outcome, singleResult.exitCode);
 						statusPayload.steps[fi].endedAt = taskEndTime;
 						statusPayload.steps[fi].durationMs = taskDuration;
 						statusPayload.steps[fi].exitCode = singleResult.exitCode;
@@ -1375,16 +1445,17 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						statusPayload.steps[fi].attemptedModels = singleResult.attemptedModels;
 						statusPayload.steps[fi].modelAttempts = singleResult.modelAttempts;
 						statusPayload.steps[fi].error = singleResult.error;
+						statusPayload.steps[fi].outcome = singleResult.outcome;
 						statusPayload.lastUpdate = taskEndTime;
 						writeAtomicJson(statusPath, statusPayload);
 
 						appendJsonl(eventsPath, JSON.stringify({
-							type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+							type: outcomeToEventType(singleResult.outcome, singleResult.exitCode),
 							ts: taskEndTime, runId: id, stepIndex: fi, agent: task.agent,
 							exitCode: singleResult.exitCode, durationMs: taskDuration,
 						}));
-						if (singleResult.completionGuardTriggered) {
-							const event = buildControlEvent({
+						if (singleResult.outcome?.kind === "failed" && singleResult.outcome.error.code === "completion_guard_no_mutation") {
+							appendControlEvent(buildControlEvent({
 								from: statusPayload.steps[fi].activityState,
 								to: "needs_attention",
 								runId: id,
@@ -1393,8 +1464,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 								ts: taskEndTime,
 								message: `${task.agent} completed without making edits for an implementation task`,
 								reason: "completion_guard",
-							});
-							appendControlEvent(event);
+							}));
+						} else if (singleResult.unexpectedMutation) {
+							appendControlEvent(buildControlEvent({
+								from: statusPayload.steps[fi].activityState,
+								to: "needs_attention",
+								runId: id,
+								agent: task.agent,
+								index: fi,
+								ts: taskEndTime,
+								message: `${task.agent} performed a mutating tool call despite declaring read-only capabilities`,
+								reason: "unexpected_mutation",
+							}));
 						}
 
 						if (singleResult.exitCode !== 0 && failFast) aborted = true;
@@ -1427,7 +1508,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						agent: pr.agent,
 						output: pr.output,
 						error: pr.error,
-						success: pr.exitCode === 0,
+						success: pr.outcome?.kind === "succeeded",
 						skipped: pr.skipped,
 						sessionFile: pr.sessionFile,
 						intercomTarget: pr.intercomTarget,
@@ -1435,6 +1516,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 						attemptedModels: pr.attemptedModels,
 						modelAttempts: pr.modelAttempts,
 						artifactPaths: pr.artifactPaths,
+						outcome: pr.outcome,
+						unexpectedMutation: pr.unexpectedMutation,
 					});
 				}
 
@@ -1513,7 +1596,9 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				agent: singleResult.agent,
 				output: singleResult.output,
 				error: singleResult.error,
-				success: singleResult.exitCode === 0,
+				success: singleResult.outcome?.kind === "succeeded",
+				outcome: singleResult.outcome,
+				unexpectedMutation: singleResult.unexpectedMutation,
 				sessionFile: singleResult.sessionFile,
 				intercomTarget: singleResult.intercomTarget,
 				model: singleResult.model,
@@ -1544,7 +1629,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			}
 
 			const stepEndTime = Date.now();
-			statusPayload.steps[flatIndex].status = singleResult.exitCode === 0 ? "complete" : "failed";
+			statusPayload.steps[flatIndex].status = outcomeToStepStatus(singleResult.outcome, singleResult.exitCode);
 			statusPayload.steps[flatIndex].endedAt = stepEndTime;
 			statusPayload.steps[flatIndex].durationMs = stepEndTime - stepStartTime;
 			statusPayload.steps[flatIndex].exitCode = singleResult.exitCode;
@@ -1553,6 +1638,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			statusPayload.steps[flatIndex].attemptedModels = singleResult.attemptedModels;
 			statusPayload.steps[flatIndex].modelAttempts = singleResult.modelAttempts;
 			statusPayload.steps[flatIndex].error = singleResult.error;
+			statusPayload.steps[flatIndex].outcome = singleResult.outcome;
 			if (stepTokens) {
 				statusPayload.steps[flatIndex].tokens = stepTokens;
 				statusPayload.totalTokens = { ...previousCumulativeTokens };
@@ -1561,7 +1647,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 			writeAtomicJson(statusPath, statusPayload);
 
 			appendJsonl(eventsPath, JSON.stringify({
-				type: singleResult.exitCode === 0 ? "subagent.step.completed" : "subagent.step.failed",
+				type: outcomeToEventType(singleResult.outcome, singleResult.exitCode),
 				ts: stepEndTime,
 				runId: id,
 				stepIndex: flatIndex,
@@ -1570,8 +1656,8 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				durationMs: stepEndTime - stepStartTime,
 				tokens: stepTokens,
 			}));
-			if (singleResult.completionGuardTriggered) {
-				const event = buildControlEvent({
+			if (singleResult.outcome?.kind === "failed" && singleResult.outcome.error.code === "completion_guard_no_mutation") {
+				appendControlEvent(buildControlEvent({
 					from: statusPayload.steps[flatIndex].activityState,
 					to: "needs_attention",
 					runId: id,
@@ -1580,8 +1666,18 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 					ts: stepEndTime,
 					message: `${seqStep.agent} completed without making edits for an implementation task`,
 					reason: "completion_guard",
-				});
-				appendControlEvent(event);
+				}));
+			} else if (singleResult.unexpectedMutation) {
+				appendControlEvent(buildControlEvent({
+					from: statusPayload.steps[flatIndex].activityState,
+					to: "needs_attention",
+					runId: id,
+					agent: seqStep.agent,
+					index: flatIndex,
+					ts: stepEndTime,
+					message: `${seqStep.agent} performed a mutating tool call despite declaring read-only capabilities`,
+					reason: "unexpected_mutation",
+				}));
 			}
 
 			flatIndex++;
@@ -1711,6 +1807,7 @@ async function runSubagent(config: SubagentRunConfig): Promise<void> {
 				modelAttempts: r.modelAttempts,
 				artifactPaths: r.artifactPaths,
 				truncated: r.truncated,
+				outcome: r.outcome,
 			})),
 			exitCode: interrupted || results.every((r) => r.success) ? 0 : 1,
 			timestamp: runEndedAt,

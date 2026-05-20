@@ -3,6 +3,17 @@ import * as path from "node:path";
 import { writeAtomicJson } from "../../shared/atomic-json.ts";
 import { RESULTS_DIR, type AsyncParallelGroupStatus, type AsyncStatus, type SubagentRunMode } from "../../shared/types.ts";
 import { normalizeParallelGroups } from "./parallel-groups.ts";
+import {
+	buildOutcome,
+	parseLegacySingleResult,
+	resolveOutcomeTerminal,
+	type RunError,
+	type RunOutcome,
+} from "../shared/run-outcome.ts";
+
+function emptyUsage() {
+	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+}
 
 export type PidLiveness = "alive" | "dead" | "unknown";
 
@@ -76,10 +87,16 @@ interface ResultChildOutcome {
 	agent?: string;
 	success?: boolean;
 	error?: string;
+	exitCode?: number;
+	finalOutput?: string;
+	output?: string;
+	savedOutputPath?: string;
+	outputSaveError?: string;
 	sessionFile?: string;
 	model?: string;
 	attemptedModels?: string[];
 	modelAttempts?: NonNullable<AsyncStatus["steps"]>[number]["modelAttempts"];
+	outcome?: RunOutcome;
 }
 
 interface ResultRepairData {
@@ -101,6 +118,11 @@ function readResultRepairData(resultPath: string): ResultRepairData | undefined 
 }
 
 function childState(overallState: ResultRepairData["state"], child: ResultChildOutcome | undefined): "complete" | "failed" | "paused" {
+	// Prefer the discriminated outcome when present (α-2 writers): aborted
+	// runs are "paused", succeeded runs are "complete", failed runs are "failed".
+	if (child?.outcome?.kind === "succeeded") return "complete";
+	if (child?.outcome?.kind === "aborted") return "paused";
+	if (child?.outcome?.kind === "failed") return "failed";
 	if (child?.success === true) return "complete";
 	if (child?.success === false) return "failed";
 	return overallState;
@@ -113,6 +135,14 @@ function terminalStatusFromResult(status: AsyncStatus, resultPath: string, now: 
 		if (step.status !== "running" && step.status !== "pending") return step;
 		const child = repair.results?.[index];
 		const state = childState(repair.state, child);
+		// Outcome derivation: prefer child.outcome (α-2 writers), then parse legacy fields.
+		const childOutcome = child?.outcome ?? (child ? parseLegacySingleResult({
+			exitCode: child.exitCode ?? (state === "complete" || state === "paused" ? 0 : 1),
+			error: child.error,
+			finalOutput: child.finalOutput ?? child.output,
+			savedOutputPath: child.savedOutputPath,
+			outputSaveError: child.outputSaveError,
+		}) : undefined);
 		return {
 			...step,
 			status: state === "complete" ? "complete" as const : state,
@@ -124,6 +154,7 @@ function terminalStatusFromResult(status: AsyncStatus, resultPath: string, now: 
 			model: step.model ?? child?.model,
 			attemptedModels: step.attemptedModels ?? child?.attemptedModels,
 			modelAttempts: step.modelAttempts ?? child?.modelAttempts,
+			...(childOutcome ? { outcome: childOutcome } : {}),
 		};
 	});
 	return {
@@ -198,16 +229,36 @@ function buildFailedRepair(status: AsyncStatus, asyncDir: string, now: number, r
 			success: false,
 			state: "failed",
 			summary: message,
-			results: repairedSteps.map((step) => ({
-				agent: step.agent,
-				output: step.status === "complete" || step.status === "completed" ? "" : message,
-				error: step.status === "complete" || step.status === "completed" ? undefined : step.error ?? message,
-				success: step.status === "complete" || step.status === "completed",
-				model: step.model,
-				attemptedModels: step.attemptedModels,
-				modelAttempts: step.modelAttempts,
-				sessionFile: step.sessionFile,
-			})),
+			results: repairedSteps.map((step) => {
+				const isComplete = step.status === "complete" || step.status === "completed";
+				const childError: RunError = {
+					code: "subagent_internal_failure",
+					exitCode: 1,
+					detail: step.error ?? message,
+				};
+				const terminal = resolveOutcomeTerminal({
+					rawExitCode: isComplete ? 0 : 1,
+					overrideError: isComplete ? undefined : childError,
+					observedMutationAttempt: false,
+					resolvedOutput: { text: isComplete ? "" : message },
+				});
+				const outcome = buildOutcome({
+					terminal,
+					output: { text: isComplete ? "" : message },
+					usage: emptyUsage(),
+				});
+				return {
+					agent: step.agent,
+					output: isComplete ? "" : message,
+					error: isComplete ? undefined : step.error ?? message,
+					success: isComplete,
+					model: step.model,
+					attemptedModels: step.attemptedModels,
+					modelAttempts: step.modelAttempts,
+					sessionFile: step.sessionFile,
+					outcome,
+				};
+			}),
 			exitCode: 1,
 			timestamp: now,
 			durationMs: Math.max(0, now - status.startedAt),

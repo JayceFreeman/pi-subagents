@@ -1,5 +1,6 @@
 import type { ModelInfo as AvailableModelInfo } from "../../shared/model-info.ts";
-import type { Usage } from "../../shared/types.ts";
+import type { ModelAttempt, Usage } from "../../shared/types.ts";
+import type { ModelFailureKind } from "./run-outcome.ts";
 
 export type { AvailableModelInfo };
 
@@ -100,4 +101,28 @@ export function formatModelAttemptNote(attempt: ModelAttemptSummary, nextModel?:
 	return nextModel
 		? `[fallback] ${attempt.model} failed: ${failure}. Retrying with ${nextModel}.`
 		: `[fallback] ${attempt.model} failed: ${failure}.`;
+}
+
+const QUOTA_PATTERNS = [/rate\s*limit/i, /too many requests/i, /\b429\b/, /quota/i, /billing/i, /credit/i];
+const AUTH_PATTERNS = [/auth(?:entication)?/i, /unauthori[sz]ed/i, /forbidden/i, /api key/i, /token expired/i, /invalid key/i];
+const PROVIDER_PATTERNS = [/provider.*unavailable/i, /model.*unavailable/i, /model.*disabled/i, /model.*not found/i, /unknown model/i, /overloaded/i, /service unavailable/i, /temporar(?:ily)? unavailable/i];
+const TRANSPORT_PATTERNS = [/connection refused/i, /fetch failed/i, /network error/i, /socket hang up/i, /upstream/i, /timed? out/i, /timeout/i, /\b502\b/, /\b503\b/, /\b504\b/];
+
+/**
+ * Classify a failed model attempt against the same retry-pattern surface used by
+ * `isRetryableModelFailure`. Used by the outcome resolver to decide whether a
+ * non-zero exit promotes to `model_unavailable` (all attempts transport/provider/
+ * auth/quota) or stays as `subagent_internal_failure`.
+ *
+ * Returns "unknown" for successful attempts — callers should not classify success.
+ */
+export function classifyAttemptFailure(attempt: ModelAttempt): ModelFailureKind {
+	if (attempt.success) return "unknown";
+	const error = attempt.error;
+	if (!error) return "unknown";
+	if (QUOTA_PATTERNS.some((p) => p.test(error))) return "quota";
+	if (AUTH_PATTERNS.some((p) => p.test(error))) return "auth";
+	if (TRANSPORT_PATTERNS.some((p) => p.test(error))) return "transport";
+	if (PROVIDER_PATTERNS.some((p) => p.test(error))) return "provider";
+	return "unknown";
 }

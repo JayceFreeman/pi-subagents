@@ -42,6 +42,13 @@ import {
 } from "../../shared/utils.ts";
 import { buildSkillInjection, resolveSkillsWithFallback } from "../../agents/skills.ts";
 import { evaluateCompletionMutationGuard } from "../shared/completion-guard.ts";
+import {
+	buildOutcome,
+	populateLegacyMirrors,
+	resolveOutcomeTerminal,
+	type ResolvedOutput,
+	type RunWarning,
+} from "../shared/run-outcome.ts";
 import { getPiSpawnCommand } from "../shared/pi-spawn.ts";
 import { createJsonlWriter } from "../../shared/jsonl-writer.ts";
 import { attachPostExitStdioGuard, trySignalChild } from "../../shared/post-exit-stdio-guard.ts";
@@ -49,6 +56,7 @@ import { applyThinkingSuffix, buildPiArgs, cleanupTempDir } from "../shared/pi-a
 import { captureSingleOutputSnapshot, formatSavedOutputReference, resolveSingleOutput, validateFileOnlyOutputMode, type SingleOutputSnapshot } from "../shared/single-output.ts";
 import {
 	buildModelCandidates,
+	classifyAttemptFailure,
 	formatModelAttemptNote,
 	isRetryableModelFailure,
 } from "../shared/model-fallback.ts";
@@ -631,6 +639,11 @@ async function runSingleAttempt(
 			tokens: progress.tokens,
 			durationMs: progress.durationMs,
 		};
+		result.outcome = buildOutcome({
+			terminal: { kind: "aborted", reason: "interrupt", mutated: observedMutationAttempt },
+			output: { text: result.finalOutput ?? "" },
+			usage: result.usage,
+		});
 		return result;
 	}
 	if (result.detached) {
@@ -639,27 +652,9 @@ async function runSingleAttempt(
 		return result;
 	}
 
-	if (result.error && result.exitCode === 0) {
-		result.exitCode = 1;
-	}
-	if (result.exitCode === 0 && !result.error) {
-		const errInfo = detectSubagentError(result.messages);
-		if (errInfo.hasError) {
-			result.exitCode = errInfo.exitCode ?? 1;
-			result.error = errInfo.details
-				? `${errInfo.errorType} failed (exit ${errInfo.exitCode}): ${errInfo.details}`
-				: `${errInfo.errorType} failed with exit code ${errInfo.exitCode}`;
-		}
-	}
-
-	progress.status = result.exitCode === 0 ? "completed" : "failed";
+	// Note: terminal classification (including exit-0 promotion for hidden
+	// tool errors and bare-error states) is now the resolver's job below.
 	progress.durationMs = Date.now() - startTime;
-	if (result.error) {
-		progress.error = result.error;
-		if (progress.currentTool) {
-			progress.failedTool = progress.currentTool;
-		}
-	}
 
 	result.progressSummary = {
 		toolCount: progress.toolCount,
@@ -668,21 +663,79 @@ async function runSingleAttempt(
 	};
 
 	let fullOutput = getFinalOutput(result.messages);
-	const completionGuard = result.exitCode === 0 && !result.error && agent.completionGuard !== false
-		? evaluateCompletionMutationGuard({
+
+	// (1) Resolve output FIRST — independent of terminal classification (α-2 inversion).
+	const resolvedSave = options.outputPath
+		? resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot)
+		: { fullOutput, savedPath: undefined as string | undefined, saveError: undefined as string | undefined };
+	fullOutput = resolvedSave.fullOutput;
+	const resolvedOutput: ResolvedOutput = {
+		text: fullOutput,
+		...(resolvedSave.savedPath !== undefined ? { savedPath: resolvedSave.savedPath } : {}),
+		...(options.outputPath !== undefined ? { requestedPath: options.outputPath } : {}),
+		...(resolvedSave.saveError !== undefined ? { saveError: resolvedSave.saveError } : {}),
+		...(result.truncation !== undefined ? { truncation: result.truncation } : {}),
+	};
+	if (resolvedSave.savedPath) {
+		result.outputReference = formatSavedOutputReference(resolvedSave.savedPath, fullOutput);
+	}
+	if (resolvedSave.saveError) {
+		result.outputSaveError = resolvedSave.saveError;
+	}
+
+	// (2) Evaluate completion guard (no mutation of result.exitCode here).
+	const completionGuard = agent.completionGuard === false
+		? undefined
+		: evaluateCompletionMutationGuard({
 			agent: agent.name,
 			task,
 			messages: result.messages,
 			tools: agent.tools,
 			extensions: agent.extensions,
 			mcpDirectTools: agent.mcpDirectTools,
-		})
-		: undefined;
-	if (completionGuard?.triggered && !observedMutationAttempt) {
-		result.exitCode = 1;
-		result.error = "Subagent completed without making edits for an implementation task.\nIt appears to have returned planning or scratchpad output instead of applying changes.";
-		progress.status = "failed";
-		progress.error = result.error;
+		});
+	// Detect hidden tool errors on pristine result state. The resolver
+	// routes this to tool_error regardless of exit code.
+	const hiddenError = !result.error ? detectSubagentError(result.messages) : null;
+
+	// (3) Resolve terminal.
+	const terminal = resolveOutcomeTerminal({
+		rawExitCode: result.exitCode,
+		rawError: result.error,
+		hiddenToolError: hiddenError?.hasError ? hiddenError : undefined,
+		modelAttempts: result.modelAttempts,
+		completionGuard: completionGuard
+			? {
+				triggered: completionGuard.triggered && !observedMutationAttempt,
+				expectedMutation: completionGuard.expectedMutation,
+				unexpectedMutation: completionGuard.unexpectedMutation,
+			}
+			: undefined,
+		observedMutationAttempt,
+		resolvedOutput,
+	});
+
+	// (4) Build outcome + warnings.
+	const warnings: RunWarning[] = resolvedSave.saveError && options.outputPath
+		? [{ code: "output_save_failed", path: options.outputPath, detail: resolvedSave.saveError }]
+		: [];
+	const outcome = buildOutcome({
+		terminal,
+		output: resolvedOutput,
+		usage: result.usage,
+		warnings: warnings.length > 0 ? warnings : undefined,
+	});
+
+	// (5) Legacy mirrors.
+	populateLegacyMirrors(result, outcome);
+	progress.status = outcome.kind === "succeeded" ? "completed" : "failed";
+	if (outcome.kind === "failed") {
+		progress.error = outcome.error.detail;
+		if (progress.currentTool) progress.failedTool = progress.currentTool;
+	}
+
+	// (6) Control events keyed on outcome shape.
+	if (outcome.kind === "failed" && outcome.error.code === "completion_guard_no_mutation") {
 		emitControlEvent(buildControlEvent({
 			from: progress.activityState,
 			to: "needs_attention",
@@ -693,16 +746,19 @@ async function runSingleAttempt(
 			message: `${agent.name} completed without making edits for an implementation task`,
 			reason: "completion_guard",
 		}));
+	} else if (completionGuard?.unexpectedMutation) {
+		emitControlEvent(buildControlEvent({
+			from: progress.activityState,
+			to: "needs_attention",
+			runId: options.runId ?? agent.name,
+			agent: agent.name,
+			index: options.index,
+			ts: Date.now(),
+			message: `${agent.name} performed a mutating tool call despite declaring read-only capabilities`,
+			reason: "unexpected_mutation",
+		}));
 	}
-	if (options.outputPath && result.exitCode === 0) {
-		const resolvedOutput = resolveSingleOutput(options.outputPath, fullOutput, shared.outputSnapshot);
-		fullOutput = resolvedOutput.fullOutput;
-		result.savedOutputPath = resolvedOutput.savedPath;
-		result.outputSaveError = resolvedOutput.saveError;
-		if (resolvedOutput.savedPath) {
-			result.outputReference = formatSavedOutputReference(resolvedOutput.savedPath, fullOutput);
-		}
-	}
+
 	artifactOutputByResult.set(result, fullOutput);
 	result.outputMode = options.outputMode ?? "inline";
 	result.finalOutput = options.outputMode === "file-only" && result.savedOutputPath && result.outputReference
@@ -862,6 +918,43 @@ export async function runSync(
 		tokens: aggregateUsage.input + aggregateUsage.output,
 		durationMs: totalDurationMs,
 	};
+
+	// α-2 re-promotion: per-attempt outcome was built without visibility
+	// into the full attempts list. If the final result is a generic internal
+	// failure but every attempt is transport/provider/auth/quota, promote
+	// the outcome to model_unavailable so the caller can route accordingly.
+	if (
+		result.outcome?.kind === "failed" &&
+		result.outcome.error.code === "subagent_internal_failure" &&
+		modelAttempts.length > 0
+	) {
+		for (const attempt of modelAttempts) {
+			if (!attempt.success && !attempt.failure) {
+				attempt.failure = { kind: classifyAttemptFailure(attempt) };
+			}
+		}
+		const promotedOutput: ResolvedOutput = {
+			text: result.finalOutput ?? "",
+			...(result.savedOutputPath !== undefined ? { savedPath: result.savedOutputPath } : {}),
+			...(options.outputPath !== undefined ? { requestedPath: options.outputPath } : {}),
+			...(result.outputSaveError !== undefined ? { saveError: result.outputSaveError } : {}),
+		};
+		const reTerminal = resolveOutcomeTerminal({
+			rawExitCode: result.outcome.error.exitCode,
+			rawError: result.outcome.error.detail,
+			modelAttempts,
+			observedMutationAttempt: result.outcome.mutated,
+			resolvedOutput: promotedOutput,
+		});
+		if (reTerminal.kind === "failed" && reTerminal.error.code === "model_unavailable") {
+			const reOutcome = buildOutcome({
+				terminal: reTerminal,
+				output: promotedOutput,
+				usage: result.usage,
+			});
+			populateLegacyMirrors(result, reOutcome);
+		}
+	}
 	if (attemptNotes.length > 0 && result.progress) {
 		result.progress.recentOutput = [...attemptNotes, ...result.progress.recentOutput];
 		if (result.progress.recentOutput.length > 50) {

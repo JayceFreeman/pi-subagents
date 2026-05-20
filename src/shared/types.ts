@@ -7,6 +7,7 @@ import * as path from "node:path";
 import type { Message } from "@earendil-works/pi-ai";
 import type { FSWatcher } from "node:fs";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ModelAttemptFailure, RunOutcome } from "../runs/shared/run-outcome.ts";
 
 // ============================================================================
 // Basic Types
@@ -26,7 +27,7 @@ export interface SavedOutputReference {
 	message: string;
 }
 
-interface TruncationResult {
+export interface TruncationResult {
 	text: string;
 	truncated: boolean;
 	originalBytes?: number;
@@ -84,7 +85,7 @@ export interface ControlEvent {
 	index?: number;
 	runId: string;
 	message: string;
-	reason?: "idle" | "completion_guard" | "active_long_running" | "tool_failures" | "time_threshold" | "turn_threshold" | "token_threshold";
+	reason?: "idle" | "completion_guard" | "unexpected_mutation" | "active_long_running" | "tool_failures" | "time_threshold" | "turn_threshold" | "token_threshold";
 	turns?: number;
 	tokens?: number;
 	toolCount?: number;
@@ -174,6 +175,7 @@ export interface ModelAttempt {
 	exitCode?: number | null;
 	error?: string;
 	usage?: Usage;
+	failure?: ModelAttemptFailure;
 }
 
 export interface SingleResult {
@@ -203,6 +205,7 @@ export interface SingleResult {
 	savedOutputPath?: string;
 	outputReference?: SavedOutputReference;
 	outputSaveError?: string;
+	outcome?: RunOutcome;
 }
 
 export interface Details {
@@ -319,6 +322,7 @@ export interface AsyncStatus {
 		attemptedModels?: string[];
 		modelAttempts?: ModelAttempt[];
 		error?: string;
+		outcome?: RunOutcome;
 	}>;
 	sessionDir?: string;
 	outputFile?: string;
