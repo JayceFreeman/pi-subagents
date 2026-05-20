@@ -771,6 +771,7 @@ export async function runSync(
 	const candidates = buildModelCandidates(
 		options.modelOverride ?? agent.model,
 		agent.fallbackModels,
+		options.knownModels,
 		options.availableModels,
 		options.preferredModelProvider,
 	);

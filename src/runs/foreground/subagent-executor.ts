@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type AgentConfig, type AgentScope } from "../../agents/agents.ts";
+import type { AgentConfig, AgentScope } from "../../agents/agents.ts";
 import { getArtifactsDir } from "../../shared/artifacts.ts";
 import { ChainClarifyComponent, type ChainClarifyResult } from "./chain-clarify.ts";
 import { toModelInfo, type ModelInfo } from "../../shared/model-info.ts";
@@ -471,6 +471,7 @@ async function resumeAsyncRun(input: {
 
 	const runId = randomUUID().slice(0, 8);
 	const artifactConfig: ArtifactConfig = { ...DEFAULT_ARTIFACT_CONFIG, enabled: input.params.artifacts !== false };
+	const knownModels = input.ctx.modelRegistry.getAll().map(toModelInfo);
 	const availableModels = input.ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const result = executeAsyncSingle(runId, {
 		agent: target.agent,
@@ -495,6 +496,7 @@ async function resumeAsyncRun(input: {
 		controlConfig: resolveControlConfig(input.deps.config.control, input.params.control),
 		controlIntercomTarget: intercomBridge.active ? intercomBridge.orchestratorTarget : undefined,
 		childIntercomTarget: intercomBridge.active ? (agent, index) => resolveSubagentIntercomTarget(runId, agent, index) : undefined,
+		knownModels,
 		availableModels,
 	});
 	if (result.isError) return result;
@@ -892,6 +894,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 		currentSessionId: deps.state.currentSessionId!,
 		currentModelProvider: ctx.model?.provider,
 	};
+	const knownModels: ModelInfo[] = ctx.modelRegistry.getAll().map(toModelInfo);
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const currentMaxSubagentDepth = resolveCurrentMaxSubagentDepth(deps.config.maxSubagentDepth);
 	const currentProvider = ctx.model?.provider;
@@ -924,6 +927,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			resultMode: "parallel",
 			agents,
 			ctx: asyncCtx,
+			knownModels,
 			availableModels,
 			cwd: effectiveCwd,
 			maxOutput: params.maxOutput,
@@ -951,6 +955,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			task: params.task,
 			agents,
 			ctx: asyncCtx,
+			knownModels,
 			availableModels,
 			cwd: effectiveCwd,
 			maxOutput: params.maxOutput,
@@ -990,6 +995,7 @@ function runAsyncPath(data: ExecutionContextData, deps: ExecutorDeps): AgentTool
 			task: params.context === "fork" ? wrapForkTask(params.task ?? "") : (params.task ?? ""),
 			agentConfig: a,
 			ctx: asyncCtx,
+			knownModels,
 			availableModels,
 			cwd: effectiveCwd,
 			maxOutput: params.maxOutput,
@@ -1088,6 +1094,7 @@ async function runChainPath(data: ExecutionContextData, deps: ExecutorDeps): Pro
 			task: params.task,
 			agents,
 			ctx: asyncCtx,
+			knownModels: ctx.modelRegistry.getAll().map(toModelInfo),
 			availableModels: ctx.modelRegistry.getAvailable().map(toModelInfo),
 			cwd: effectiveCwd,
 			maxOutput: params.maxOutput,
@@ -1144,6 +1151,7 @@ interface ForegroundParallelRunInput {
 	maxOutput?: MaxOutputConfig;
 	paramsCwd: string;
 	maxSubagentDepths: number[];
+	knownModels: ModelInfo[];
 	availableModels: ModelInfo[];
 	modelOverrides: (string | undefined)[];
 	behaviors: Array<ReturnType<typeof resolveStepBehavior>>;
@@ -1312,6 +1320,7 @@ async function runForegroundParallelTasks(input: ForegroundParallelRunInput): Pr
 			intercomSessionName: input.childIntercomTarget?.(task.agent, index),
 			orchestratorIntercomTarget: input.orchestratorIntercomTarget,
 			modelOverride: input.modelOverrides[index],
+			knownModels: input.knownModels,
 			availableModels: input.availableModels,
 			preferredModelProvider: input.ctx.model?.provider,
 			skills: effectiveSkills === false ? [] : effectiveSkills,
@@ -1415,6 +1424,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 	}
 
 	const currentProvider = ctx.model?.provider;
+	const knownModels: ModelInfo[] = ctx.modelRegistry.getAll().map(toModelInfo);
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let taskTexts = tasks.map((t) => t.task);
 	const skillOverrides: (string[] | false | undefined)[] = tasks.map((t) =>
@@ -1447,6 +1457,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 					"",
 					undefined,
 					behaviors,
+					knownModels,
 					availableModels,
 					currentProvider,
 					availableSkills,
@@ -1511,6 +1522,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 				resultMode: "parallel",
 				agents,
 				ctx: asyncCtx,
+				knownModels,
 				availableModels,
 				cwd: effectiveCwd,
 				maxOutput: params.maxOutput,
@@ -1585,6 +1597,7 @@ async function runParallelPath(data: ExecutionContextData, deps: ExecutorDeps): 
 			artifactsDir,
 			maxOutput: params.maxOutput,
 			paramsCwd: effectiveCwd,
+			knownModels,
 			availableModels,
 			modelOverrides,
 			behaviors,
@@ -1707,6 +1720,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 	}
 
 	const currentProvider = ctx.model?.provider;
+	const knownModels: ModelInfo[] = ctx.modelRegistry.getAll().map(toModelInfo);
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	let task = params.task ?? "";
 	let modelOverride: string | undefined = resolveModelCandidate(
@@ -1734,6 +1748,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 					task,
 					undefined,
 					[behavior],
+					knownModels,
 					availableModels,
 					currentProvider,
 					availableSkills,
@@ -1773,6 +1788,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 				task: params.context === "fork" ? wrapForkTask(task) : task,
 				agentConfig,
 				ctx: asyncCtx,
+				knownModels,
 				availableModels,
 				cwd: effectiveCwd,
 				maxOutput: params.maxOutput,
@@ -1871,6 +1887,7 @@ async function runSinglePath(data: ExecutionContextData, deps: ExecutorDeps): Pr
 		orchestratorIntercomTarget: data.intercomBridge.active ? data.intercomBridge.orchestratorTarget : undefined,
 		index: 0,
 		modelOverride,
+		knownModels,
 		availableModels,
 		preferredModelProvider: currentProvider,
 		skills: effectiveSkills,

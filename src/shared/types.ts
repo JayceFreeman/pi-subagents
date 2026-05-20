@@ -475,7 +475,9 @@ export interface RunSyncOptions {
 	maxSubagentDepth?: number;
 	/** Override the agent's default model (format: "provider/id" or just "id") */
 	modelOverride?: string;
-	/** Registry models available for heuristic bare-model resolution */
+	/** Registry models known to this install (auth may still be missing for some providers) */
+	knownModels?: Array<{ provider: string; id: string; fullId: string }>;
+	/** Registry models available with configured auth for heuristic bare-model resolution */
 	availableModels?: Array<{ provider: string; id: string; fullId: string }>;
 	/** Current parent-session provider to prefer for ambiguous bare model ids */
 	preferredModelProvider?: string;

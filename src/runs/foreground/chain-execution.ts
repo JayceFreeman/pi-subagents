@@ -76,6 +76,7 @@ interface ParallelChainRunInput {
 	parallelBehaviors: ResolvedStepBehavior[];
 	agents: AgentConfig[];
 	stepIndex: number;
+	knownModels: ModelInfo[];
 	availableModels: ModelInfo[];
 	chainDir: string;
 	prev: string;
@@ -245,6 +246,7 @@ async function runParallelChainTasks(input: ParallelChainRunInput): Promise<Sing
 				intercomSessionName: input.childIntercomTarget?.(task.agent, input.globalTaskIndex + taskIndex),
 				orchestratorIntercomTarget: input.orchestratorIntercomTarget,
 				modelOverride: effectiveModel,
+				knownModels: input.knownModels,
 				availableModels: input.availableModels,
 				preferredModelProvider: input.ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
@@ -395,6 +397,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 	let templates: ResolvedTemplates = resolveChainTemplates(chainSteps);
 	const shouldClarify = clarify !== false && ctx.hasUI && !hasParallelSteps;
 	let tuiBehaviorOverrides: (BehaviorOverride | undefined)[] | undefined;
+	const knownModels: ModelInfo[] = ctx.modelRegistry.getAll().map(toModelInfo);
 	const availableModels: ModelInfo[] = ctx.modelRegistry.getAvailable().map(toModelInfo);
 	const availableSkills = discoverAvailableSkills(cwd ?? ctx.cwd);
 
@@ -438,6 +441,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					originalTask,
 					chainDir,
 					resolvedBehaviors,
+					knownModels,
 					availableModels,
 					ctx.model?.provider,
 					availableSkills,
@@ -566,6 +570,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 					parallelBehaviors,
 					agents,
 					stepIndex,
+					knownModels,
 					availableModels,
 					chainDir,
 					prev,
@@ -794,6 +799,7 @@ export async function executeChain(params: ChainExecutionParams): Promise<ChainE
 				intercomSessionName: childIntercomTarget?.(seqStep.agent, globalTaskIndex),
 				orchestratorIntercomTarget,
 				modelOverride: effectiveModel,
+				knownModels,
 				availableModels,
 				preferredModelProvider: ctx.model?.provider,
 				skills: behavior.skills === false ? [] : behavior.skills,
