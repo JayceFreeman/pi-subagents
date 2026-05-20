@@ -674,6 +674,7 @@ async function runSingleAttempt(
 			task,
 			messages: result.messages,
 			tools: agent.tools,
+			extensions: agent.extensions,
 			mcpDirectTools: agent.mcpDirectTools,
 		})
 		: undefined;

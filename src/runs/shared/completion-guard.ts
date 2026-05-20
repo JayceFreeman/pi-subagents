@@ -66,18 +66,26 @@ const READ_ONLY_BUILTIN_TOOLS = new Set([
 	"contact_supervisor",
 ]);
 
+export interface DeclaredCapabilities {
+	readonly tools?: readonly string[];
+	readonly extensions?: readonly string[];
+	readonly mcpDirectTools?: readonly string[];
+}
+
 interface CompletionMutationGuardInput {
 	agent: string;
 	task: string;
 	messages: Message[];
-	tools?: string[];
-	mcpDirectTools?: string[];
+	tools?: readonly string[];
+	extensions?: readonly string[];
+	mcpDirectTools?: readonly string[];
 }
 
 interface CompletionMutationGuardResult {
 	expectedMutation: boolean;
 	attemptedMutation: boolean;
 	triggered: boolean;
+	unexpectedMutation: boolean;
 }
 
 function stripFrameworkInstructions(task: string): string {
@@ -96,11 +104,20 @@ function stripScopedNoEditConstraints(task: string): string {
 	return stripped;
 }
 
-function declaresOnlyReadOnlyTools(tools: string[] | undefined, mcpDirectTools: string[] | undefined): boolean {
-	return tools !== undefined
-		&& tools.length > 0
-		&& (mcpDirectTools?.length ?? 0) === 0
-		&& tools.every((tool) => READ_ONLY_BUILTIN_TOOLS.has(tool));
+/**
+ * Returns true only when the declared capability surface is provably read-only.
+ *
+ * All three channels must be safe: `tools` (declared, non-empty, every entry in the
+ * read-only builtin set), `extensions` (none declared — their tool surface is unknown),
+ * and `mcpDirectTools` (none declared — same reason). Absence of `tools` returns false
+ * (legacy frontmatter; platform defaults may include mutating tools). The asymmetry is
+ * intentional: declaring read-only is the safer, more explicit choice.
+ */
+export function declaredCannotMutate(caps: DeclaredCapabilities): boolean {
+	if (!caps.tools?.length) return false;
+	if (caps.extensions?.length) return false;
+	if (caps.mcpDirectTools?.length) return false;
+	return caps.tools.every((tool) => READ_ONLY_BUILTIN_TOOLS.has(tool));
 }
 
 export function expectsImplementationMutation(agent: string, task: string): boolean {
@@ -135,7 +152,12 @@ export function hasMutationToolCall(messages: Message[]): boolean {
 }
 
 export function evaluateCompletionMutationGuard(input: CompletionMutationGuardInput): CompletionMutationGuardResult {
-	const expectedMutation = declaresOnlyReadOnlyTools(input.tools, input.mcpDirectTools)
+	const declaredReadOnly = declaredCannotMutate({
+		tools: input.tools,
+		extensions: input.extensions,
+		mcpDirectTools: input.mcpDirectTools,
+	});
+	const expectedMutation = declaredReadOnly
 		? false
 		: expectsImplementationMutation(input.agent, input.task);
 	const attemptedMutation = hasMutationToolCall(input.messages);
@@ -143,5 +165,6 @@ export function evaluateCompletionMutationGuard(input: CompletionMutationGuardIn
 		expectedMutation,
 		attemptedMutation,
 		triggered: expectedMutation && !attemptedMutation,
+		unexpectedMutation: declaredReadOnly && attemptedMutation,
 	};
 }

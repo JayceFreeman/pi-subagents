@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import type { Message } from "@earendil-works/pi-ai";
 
 import {
+	declaredCannotMutate,
 	evaluateCompletionMutationGuard,
 	expectsImplementationMutation,
 	hasMutationToolCall,
@@ -34,6 +35,7 @@ test("implementation task with no mutation triggers the completion guard", () =>
 		expectedMutation: true,
 		attemptedMutation: false,
 		triggered: true,
+		unexpectedMutation: false,
 	});
 });
 
@@ -49,6 +51,7 @@ test("declared read-only builtin tools suppress implementation-word false positi
 		expectedMutation: false,
 		attemptedMutation: false,
 		triggered: false,
+		unexpectedMutation: false,
 	});
 });
 
@@ -79,7 +82,75 @@ test("worker with mutating-capable tools still triggers when no mutation is obse
 		expectedMutation: true,
 		attemptedMutation: false,
 		triggered: true,
+		unexpectedMutation: false,
 	});
+});
+
+test("declaredCannotMutate enforces all three capability channels", () => {
+	// Positive: declared read-only builtins only.
+	assert.equal(declaredCannotMutate({ tools: ["read", "grep", "find", "ls"] }), true);
+	assert.equal(declaredCannotMutate({ tools: ["read"], extensions: [], mcpDirectTools: [] }), true);
+
+	// Negative: missing or empty tools cannot be proven safe.
+	assert.equal(declaredCannotMutate({ tools: undefined }), false);
+	assert.equal(declaredCannotMutate({ tools: [] }), false);
+	assert.equal(declaredCannotMutate({}), false);
+
+	// Negative: mutating tool in the allowlist absent set.
+	assert.equal(declaredCannotMutate({ tools: ["read", "edit"] }), false);
+	assert.equal(declaredCannotMutate({ tools: ["read", "bash"] }), false);
+	assert.equal(declaredCannotMutate({ tools: ["read", "custom_lookup"] }), false);
+
+	// Negative: extensions and mcpDirectTools block (unknown mutation capability).
+	assert.equal(declaredCannotMutate({ tools: ["read", "grep"], extensions: ["./mut.ts"] }), false);
+	assert.equal(declaredCannotMutate({ tools: ["read", "grep"], mcpDirectTools: ["github/search"] }), false);
+	assert.equal(declaredCannotMutate({ tools: ["read", "grep"], extensions: ["./a"], mcpDirectTools: ["x"] }), false);
+});
+
+test("extensions channel blocks the read-only short-circuit", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "architect",
+		task: "Implement the approved fix",
+		messages: [assistantText("Proposal only")],
+		tools: ["read", "grep"],
+		extensions: ["./mutating-extension.ts"],
+	});
+
+	// Without extensions: would short-circuit to triggered=false.
+	// With extensions: capability surface unknown, fall through to regex chain.
+	assert.equal(result.expectedMutation, true);
+	assert.equal(result.triggered, true);
+	assert.equal(result.unexpectedMutation, false);
+});
+
+test("unexpectedMutation fires when a declared read-only agent emits a mutating tool call", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "architect",
+		task: "Produce a proposal",
+		messages: [assistantToolCall("edit", { path: "hijacked.ts" })],
+		tools: ["read", "grep", "find", "ls"],
+	});
+
+	// Declared read-only short-circuit: expectedMutation false, triggered false.
+	// But the agent attempted a mutating tool call — contract violation surfaces.
+	assert.deepEqual(result, {
+		expectedMutation: false,
+		attemptedMutation: true,
+		triggered: false,
+		unexpectedMutation: true,
+	});
+});
+
+test("unexpectedMutation does not fire when capability surface is not declared read-only", () => {
+	const result = evaluateCompletionMutationGuard({
+		agent: "worker",
+		task: "Fix the bug",
+		messages: [assistantToolCall("edit", { path: "file.ts" })],
+		tools: ["read", "edit"],
+	});
+
+	assert.equal(result.unexpectedMutation, false);
+	assert.equal(result.attemptedMutation, true);
 });
 
 test("review-only, research, and framework output instructions do not expect mutation", () => {

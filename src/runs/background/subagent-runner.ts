@@ -651,6 +651,7 @@ async function runSingleStep(
 				task,
 				messages: run.messages,
 				tools: step.tools,
+				extensions: step.extensions,
 				mcpDirectTools: step.mcpDirectTools,
 			})
 			: undefined;
