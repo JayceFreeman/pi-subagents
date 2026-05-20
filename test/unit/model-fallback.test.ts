@@ -68,8 +68,33 @@ describe("model fallback helpers", () => {
 		assert.equal(isRetryableModelFailure("authentication failed"), true);
 	});
 
+	it("detects retryable streaming transport failures", () => {
+		for (const error of [
+			"WebSocket error",
+			"WebSocket closed 1000",
+			"WebSocket closed with code 1000",
+			"web socket disconnected",
+			"ws error",
+			"read ECONNRESET",
+			"connect ETIMEDOUT",
+			"getaddrinfo EAI_AGAIN",
+			"write EPIPE",
+			"Premature close",
+			"Underlying socket disconnected",
+			"HTTP/2 stream error: RST_STREAM",
+			"received GOAWAY",
+			"Stream closed",
+			"The connection was closed unexpectedly",
+			"socket closed by peer",
+		]) {
+			assert.equal(isRetryableModelFailure(error), true, error);
+		}
+	});
+
 	it("does not treat ordinary task/tool failures as retryable model failures", () => {
 		assert.equal(isRetryableModelFailure("bash failed (exit 1): command not found"), false);
+		assert.equal(isRetryableModelFailure("bash failed (exit 1): target closed unexpectedly"), false);
+		assert.equal(isRetryableModelFailure("read failed (exit 1): issue was closed by peer"), false);
 		assert.equal(isRetryableModelFailure("read failed (exit 1): no such file or directory"), false);
 		assert.equal(isRetryableModelFailure(undefined), false);
 	});
